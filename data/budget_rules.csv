@@ -7,19 +7,19 @@ Cellphone,Housing,50.0
 Car Insurance,Insurance,250.0
 Gas,Transportation,250.0
 Car Maintenance,Transportation,100.0
-Groceries,Food,700.0
-Eating out ,Food,300.0
-Pocket Money ,Personal,200.0
-Gifts,Miscellaneous,100.0
-toiletries,Miscellaneous,100.0
-etc.,Miscellaneous,100.0
+Groceries,Food,600.0
+Eating out ,Food,150.0
+Pocket Money ,Personal,150.0
+Gifts,Miscellaneous,75.0
+toiletries,Miscellaneous,50.0
+etc.,Miscellaneous,50.0
 Dates,Miscellaneous,100.0
 House,Miscellaneous,100.0
 Clothes,Miscellaneous,50.0
 Chiropractor,Medical,200.0
 Massage,Medical,144.0
 Medicine,Medical,50.0
-Bills,Medical,0.0
+Bills,Medical,100.0
 Dog Expenses,Dog,50.0
 Childcare,Kids,185.0
 Mirren,Kids,50.0
