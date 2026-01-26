@@ -1,11 +1,19 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import numpy as np
 import json
-import random
 import time
 from datetime import datetime
+from github import Github
+from io import StringIO
+
+# --- CONFIGURATION ---
+BRANCH = "main" # or "master", check your repo
+FILE_PATHS = {
+    "transactions": "data/transactions.csv",
+    "budget_rules": "data/budget_rules.csv",
+    "income": "data/income.csv"
+}
 
 # --- HARDCODED DEFAULTS ---
 DEFAULT_BUDGET = [
@@ -40,7 +48,6 @@ def check_password():
     
     st.title("🔒 Login")
     pwd = st.text_input("Enter Family Password", type="password")
-    
     if st.button("Log In"):
         if pwd == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
@@ -49,34 +56,44 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- DATA MANAGER (FINAL FIX) ---
-class CloudBudgetManager:
+# --- GITHUB DATA MANAGER ---
+class GithubManager:
     def __init__(self):
-        # We access the secrets directly to convert AttrDict to a standard dict
-        # This solves the "Hashing" error because standard dicts are handleable
         try:
-            raw_creds = dict(st.secrets["connections"]["gsheets"]["service_account"])
-            self.conn = st.connection(
-                "gsheets", 
-                type=GSheetsConnection, 
-                service_account=raw_creds
-            )
+            self.g = Github(st.secrets["GITHUB_TOKEN"])
+            self.repo = self.g.get_repo(st.secrets["REPO_NAME"])
         except Exception as e:
-            st.error(f"Initialization Error: {e}")
+            st.error(f"GitHub Connection Error: {e}")
 
-    def get_data(self, worksheet_name):
+    def read_csv(self, file_key):
+        """Reads a CSV from the repo, returns DataFrame"""
+        path = FILE_PATHS[file_key]
         try:
-            return self.conn.read(worksheet=worksheet_name, ttl=0)
-        except:
+            file_content = self.repo.get_contents(path, ref=BRANCH)
+            decoded = file_content.decoded_content.decode("utf-8")
+            if not decoded.strip(): return pd.DataFrame()
+            return pd.read_csv(StringIO(decoded))
+        except Exception:
+            # File doesn't exist yet
             return pd.DataFrame()
 
-    def update_data(self, df, worksheet_name):
+    def write_csv(self, df, file_key, message="Update data"):
+        """Writes DataFrame to CSV in the repo"""
+        path = FILE_PATHS[file_key]
+        csv_content = df.to_csv(index=False)
+        
         try:
-            if df.empty: return
-            self.conn.update(worksheet=worksheet_name, data=df)
-            st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
-        except Exception as e:
-            st.error(f"Write Error on '{worksheet_name}': {str(e)}")
+            # Check if file exists to update it
+            file_content = self.repo.get_contents(path, ref=BRANCH)
+            self.repo.update_file(path, message, csv_content, file_content.sha, branch=BRANCH)
+            st.toast(f"Saved to GitHub ({file_key})! ☁️", icon="✅")
+        except:
+            # If not, create it
+            try:
+                self.repo.create_file(path, message, csv_content, branch=BRANCH)
+                st.toast(f"Created new file ({file_key})! ☁️", icon="✅")
+            except Exception as e:
+                st.error(f"Save Error: {e}")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
@@ -101,41 +118,40 @@ def auto_categorize(df, rules, defaults):
 
 # --- MAIN APP ---
 if check_password():
-    manager = CloudBudgetManager()
+    manager = GithubManager()
     
-    st.caption("🔄 Syncing with Cloud...")
-    rules_df = manager.get_data("BudgetRules")
+    # 1. Load Rules (Initialize if Missing)
+    rules_df = manager.read_csv("budget_rules")
     
     if rules_df.empty:
-        try:
-            st.info("Initializing Default Budget Rules...")
-            rules_df = pd.DataFrame(DEFAULT_BUDGET)
-            rules_df["Keywords"] = ""
-            manager.update_data(rules_df, "BudgetRules")
-            time.sleep(2)
-            st.rerun()
-        except Exception as e:
-            st.warning(f"Init Error: {e}")
+        st.info("Initializing GitHub Storage...")
+        rules_df = pd.DataFrame(DEFAULT_BUDGET)
+        rules_df["Keywords"] = ""
+        manager.write_csv(rules_df, "budget_rules", "Init Default Rules")
+        time.sleep(1)
+        st.rerun()
 
-    categories = {} 
-    targets = {}    
-    custom_rules = {} 
+    # Parse Rules
+    categories = {}
+    targets = {}
+    custom_rules = {}
     
-    if not rules_df.empty:
-        for i, row in rules_df.iterrows():
-            if pd.notna(row['Category']):
-                categories[row['Category']] = row['Group']
-                targets[row['Category']] = row['BudgetAmount']
-                if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
-                    try:
-                        kws = json.loads(row['Keywords'])
-                        for k in kws: custom_rules[k] = row['Category']
-                    except: pass
+    for i, row in rules_df.iterrows():
+        if pd.notna(row['Category']):
+            categories[row['Category']] = row['Group']
+            targets[row['Category']] = row['BudgetAmount']
+            if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
+                try:
+                    kws = json.loads(row['Keywords'])
+                    for k in kws: custom_rules[k] = row['Category']
+                except: pass
 
-    tx_df = manager.get_data("Transactions")
+    # 2. Load Transactions
+    tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
 
-    inc_df = manager.get_data("Income")
+    # 3. Load Income
+    inc_df = manager.read_csv("income")
     if inc_df.empty: inc_df = pd.DataFrame(columns=["Source", "Amount"])
 
     # --- SIDEBAR ---
@@ -146,6 +162,7 @@ if check_password():
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
         
+        # Date Filter
         with st.expander("📅 Filter Date Range"):
             if not tx_df.empty and 'Date' in tx_df.columns:
                 tx_df['Date'] = pd.to_datetime(tx_df['Date'])
@@ -205,7 +222,7 @@ if check_password():
             st.info("Use this when you are at the store to check budget and add expense.")
             all_cats = sorted(list(categories.keys()))
             if not all_cats:
-                st.warning("No categories found! Waiting for sync...")
+                st.warning("No categories found!")
                 sel_cat = None
             else:
                 sel_cat = st.selectbox("Category", all_cats, index=0)
@@ -241,7 +258,7 @@ if check_password():
                         "Nuance_Check": False
                     }])
                     updated_df = pd.concat([tx_df, new_row], ignore_index=True)
-                    manager.update_data(updated_df, "Transactions")
+                    manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
                     st.success("Transaction Added!")
                     time.sleep(1)
                     st.rerun()
@@ -283,7 +300,7 @@ if check_password():
                         new_data = pd.concat(new_dfs)
                         combined = pd.concat([tx_df, new_data], ignore_index=True)
                         combined = combined.drop_duplicates(subset=['Date', 'Description', 'Amount'])
-                        manager.update_data(combined, "Transactions")
+                        manager.write_csv(combined, "transactions", "Bulk Upload")
                         st.success(f"Added {len(new_data)} transactions! Go to 'Review' tab.")
 
     # --- REVIEW ---
@@ -316,7 +333,7 @@ if check_password():
             
             if st.button("Save Changes"):
                 tx_df.update(edited_view)
-                manager.update_data(tx_df, "Transactions")
+                manager.write_csv(tx_df, "transactions", "Review Changes")
 
     # --- SETTINGS ---
     elif page == "💰 Income & Budget":
@@ -325,10 +342,10 @@ if check_password():
         
         with t1:
             edited_inc = st.data_editor(inc_df, num_rows="dynamic", use_container_width=True)
-            if st.button("Save Income"): manager.update_data(edited_inc, "Income")
+            if st.button("Save Income"): manager.write_csv(edited_inc, "income", "Update Income")
         
         with t2:
-            st.info("Edit your budget targets here. Changes save to the cloud.")
+            st.info("Edit your budget targets here.")
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
             if st.button("Save Categories"):
-                manager.update_data(edited_rules, "BudgetRules")
+                manager.write_csv(edited_rules, "budget_rules", "Update Rules")
