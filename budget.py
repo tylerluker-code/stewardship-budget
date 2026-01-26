@@ -7,6 +7,27 @@ import random
 import time
 from datetime import datetime
 
+# --- HARDCODED DEFAULTS (The "Starter Pack") ---
+DEFAULT_BUDGET = [
+    {"Group": "Giving", "Category": "Tithe", "BudgetAmount": 500.0},
+    {"Group": "Giving", "Category": "Offerings", "BudgetAmount": 100.0},
+    {"Group": "Housing", "Category": "Mortgage/Rent", "BudgetAmount": 1500.0},
+    {"Group": "Housing", "Category": "Utilities", "BudgetAmount": 250.0},
+    {"Group": "Housing", "Category": "Maintenance", "BudgetAmount": 100.0},
+    {"Group": "Food", "Category": "Groceries", "BudgetAmount": 600.0},
+    {"Group": "Food", "Category": "Eating Out", "BudgetAmount": 150.0},
+    {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 200.0},
+    {"Group": "Transportation", "Category": "Car Insurance", "BudgetAmount": 100.0},
+    {"Group": "Transportation", "Category": "Repairs/Maint", "BudgetAmount": 50.0},
+    {"Group": "Lifestyle", "Category": "Entertainment", "BudgetAmount": 100.0},
+    {"Group": "Lifestyle", "Category": "Subscriptions", "BudgetAmount": 50.0},
+    {"Group": "Lifestyle", "Category": "Personal Care", "BudgetAmount": 50.0},
+    {"Group": "Health", "Category": "Medical/Rx", "BudgetAmount": 100.0},
+    {"Group": "Savings", "Category": "Emergency Fund", "BudgetAmount": 200.0},
+    {"Group": "Savings", "Category": "Investments", "BudgetAmount": 200.0},
+    {"Group": "Business", "Category": "Business/Cru", "BudgetAmount": 0.0}
+]
+
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
 
@@ -77,9 +98,16 @@ def auto_categorize(df, rules, defaults):
 if check_password():
     manager = CloudBudgetManager()
     
-    # 1. Load Rules
+    # 1. Load Rules (Auto-Initialize if Empty)
     rules_df = manager.get_data("BudgetRules")
-    if rules_df.empty: rules_df = pd.DataFrame(columns=["Category", "Group", "BudgetAmount", "Keywords"])
+    
+    if rules_df.empty:
+        # FIRST RUN: Populate with Hardcoded Defaults
+        st.toast("Initializing Default Budget...", icon="⚙️")
+        rules_df = pd.DataFrame(DEFAULT_BUDGET)
+        rules_df["Keywords"] = "" # Add empty keywords column
+        manager.update_data(rules_df, "BudgetRules")
+        time.sleep(1) # Give it a second to sync
     
     categories = {} 
     targets = {}    
@@ -89,7 +117,7 @@ if check_password():
         if pd.notna(row['Category']):
             categories[row['Category']] = row['Group']
             targets[row['Category']] = row['BudgetAmount']
-            if pd.notna(row['Keywords']) and row['Keywords']:
+            if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
                 try:
                     kws = json.loads(row['Keywords'])
                     for k in kws: custom_rules[k] = row['Category']
@@ -110,7 +138,24 @@ if check_password():
     # --- DASHBOARD ---
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
-        personal_tx = tx_df[tx_df['Is_Cru'] == False] if not tx_df.empty else tx_df
+        
+        # Date Filter
+        with st.expander("📅 Filter Date Range"):
+            if not tx_df.empty and 'Date' in tx_df.columns:
+                tx_df['Date'] = pd.to_datetime(tx_df['Date'])
+                min_date = tx_df['Date'].min().date()
+                max_date = tx_df['Date'].max().date()
+                d_range = st.date_input("Select Range", [min_date, max_date])
+                
+                if len(d_range) == 2:
+                    mask = (tx_df['Date'].dt.date >= d_range[0]) & (tx_df['Date'].dt.date <= d_range[1])
+                    dashboard_tx = tx_df[mask]
+                else:
+                    dashboard_tx = tx_df
+            else:
+                dashboard_tx = tx_df
+
+        personal_tx = dashboard_tx[dashboard_tx['Is_Cru'] == False] if not dashboard_tx.empty else dashboard_tx
         total_income = inc_df['Amount'].sum() if not inc_df.empty else 0.0
         total_spent = personal_tx['Amount'].sum() if not personal_tx.empty else 0.0
         total_budget = sum(targets.values())
@@ -145,41 +190,34 @@ if check_password():
                     g_data.append({"Category": cat, "Budget": b, "Spent": s, "Remaining": rem})
                 st.dataframe(pd.DataFrame(g_data), hide_index=True, use_container_width=True)
 
-    # --- ADD TRANSACTIONS (UPDATED) ---
+    # --- ADD TRANSACTIONS ---
     elif page == "📥 Add Transactions":
         st.header("📥 Add Transactions")
-        
-        # Two Tabs: Manual vs CSV
         tab_manual, tab_csv = st.tabs(["✍️ Manual Entry (Single)", "📂 Bulk Upload (CSV)"])
         
-        # --- TAB 1: MANUAL ENTRY ---
         with tab_manual:
             st.info("Use this when you are at the store to check budget and add expense.")
-            
-            # Category Selection FIRST (to show budget)
             all_cats = sorted(list(categories.keys()))
-            sel_cat = st.selectbox("Category", all_cats, index=0)
+            if not all_cats:
+                st.warning("No categories found! Go to 'Income & Budget' to reset.")
+                sel_cat = None
+            else:
+                sel_cat = st.selectbox("Category", all_cats, index=0)
             
-            # --- REAL TIME BUDGET CHECK ---
             if sel_cat:
                 b_val = targets.get(sel_cat, 0.0)
-                # Calculate current spent
                 if not tx_df.empty:
-                    # Filter for this category AND non-Cru
+                    tx_df['Is_Cru'] = tx_df['Is_Cru'].astype(bool)
                     curr_s = tx_df[(tx_df['Category'] == sel_cat) & (tx_df['Is_Cru'] == False)]['Amount'].sum()
                 else:
                     curr_s = 0.0
-                
                 rem_val = b_val - curr_s
                 
-                # Big Visual Card
                 col_m1, col_m2 = st.columns(2)
                 col_m1.metric(f"Budget for {sel_cat}", f"${b_val:,.0f}")
                 col_m2.metric(f"⚠️ Remaining Available", f"${rem_val:,.2f}", delta_color="normal" if rem_val > 0 else "inverse")
-                
                 st.divider()
 
-            # Entry Form
             c1, c2 = st.columns(2)
             d_date = c1.date_input("Date", datetime.now())
             d_amt = c2.number_input("Amount ($)", min_value=0.0, step=0.01)
@@ -196,22 +234,17 @@ if check_password():
                         "Is_Cru": is_cru,
                         "Nuance_Check": False
                     }])
-                    
-                    # Add to dataframe
                     updated_df = pd.concat([tx_df, new_row], ignore_index=True)
-                    # Save to Google Sheets
                     manager.update_data(updated_df, "Transactions")
                     st.success("Transaction Added!")
                     time.sleep(1)
-                    st.rerun() # Refresh to update the budget numbers immediately
+                    st.rerun()
                 else:
                     st.warning("Please enter an amount.")
 
-        # --- TAB 2: CSV UPLOAD ---
         with tab_csv:
             st.info("Upload your weekly bank export here.")
             uploaded_files = st.file_uploader("Choose CSV files", accept_multiple_files=True, type='csv')
-            
             if st.button("Process & Merge CSVs"):
                 if uploaded_files:
                     new_dfs = []
@@ -283,11 +316,13 @@ if check_password():
     elif page == "💰 Income & Budget":
         st.header("Settings")
         t1, t2 = st.tabs(["Income", "Budget Categories"])
+        
         with t1:
             edited_inc = st.data_editor(inc_df, num_rows="dynamic", use_container_width=True)
             if st.button("Save Income"): manager.update_data(edited_inc, "Income")
+        
         with t2:
+            st.info("Edit your budget targets here. Changes save to the cloud.")
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
             if st.button("Save Categories"):
-                final_rules = edited_rules.copy()
-                manager.update_data(final_rules, "BudgetRules")
+                manager.update_data(edited_rules, "BudgetRules")
