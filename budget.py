@@ -314,7 +314,8 @@ if check_password():
                 report_period = "No Data"
 
         personal_tx = dashboard_tx[dashboard_tx['Is_Cru'] == False] if not dashboard_tx.empty else dashboard_tx
-        
+        cru_tx = dashboard_tx[dashboard_tx['Is_Cru'] == True] if not dashboard_tx.empty else pd.DataFrame()
+
         total_income = float(inc_df['Amount'].sum()) if not inc_df.empty else 0.0
         total_spent = float(personal_tx['Amount'].sum()) if not personal_tx.empty else 0.0
         total_budget = sum(targets.values())
@@ -337,11 +338,11 @@ if check_password():
                     html = f"""
                     <h2>🌸 Stewardship Report: {report_period}</h2>
                     <p><b>Income:</b> ${total_income:,.2f}<br>
-                    <b>Spent:</b> ${total_spent:,.2f}<br>
+                    <b>Spent (Personal):</b> ${total_spent:,.2f}<br>
                     <b>Savings Rate:</b> {savings_rate:.1f}%</p>
                     <hr>
                     <h3>Category Breakdown</h3>
-                    <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+                    <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
                     <tr style="background-color: #D8BFD8;"><th>Category</th><th>Budget</th><th>Spent</th><th>Remaining</th></tr>
                     """
                     
@@ -362,7 +363,24 @@ if check_password():
                             color = "red" if r < 0 else "green"
                             html += f"<tr><td>{cat}</td><td>${b:,.0f}</td><td>${s:,.0f}</td><td style='color:{color};'>${r:,.0f}</td></tr>"
                     
-                    html += "</table><br><p><i>Sent from your Stewardship App 🌸</i></p>"
+                    html += "</table>"
+
+                    # --- ADD CRU REIMBURSEMENT SECTION ---
+                    if not cru_tx.empty:
+                        html += """
+                        <br><hr>
+                        <h3>🏢 Cru Reimbursables (To Submit)</h3>
+                        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+                        <tr style="background-color: #FFD700;"><th>Date</th><th>Description</th><th>Amount</th></tr>
+                        """
+                        for idx, row in cru_tx.iterrows():
+                            d_str = row['Date'].strftime('%Y-%m-%d') if pd.notna(row['Date']) else "N/A"
+                            html += f"<tr><td>{d_str}</td><td>{row['Description']}</td><td>${row['Amount']:,.2f}</td></tr>"
+                        html += "</table>"
+                    else:
+                        html += "<br><hr><p><i>No Cru expenses marked for this period.</i></p>"
+
+                    html += "<br><p><i>Sent from your Stewardship App 🌸</i></p>"
                     
                     if send_email_report(f"Monthly Budget: {report_period}", html):
                         st.success("Sent to Tyler, Marianna, and Mare!")
