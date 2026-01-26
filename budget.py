@@ -18,7 +18,7 @@ FILE_PATHS = {
     "income": "data/income.csv"
 }
 
-RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org", "mareluker@gmail.com"]
+RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org"]
 
 # --- HARDCODED DEFAULTS (2025) ---
 DEFAULT_BUDGET = [
@@ -319,10 +319,23 @@ if check_password():
         else:
             savings_rate = 0.0
         
+        # --- FIXED METRIC DISPLAY ---
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Income", f"${total_income:,.2f}")
         c2.metric("Total Budget", f"${total_budget:,.2f}")
-        c3.metric("Actual Spent", f"${total_spent:,.2f}", delta=f"${total_budget-total_spent:,.2f}")
+        
+        # Calculate Delta and Color
+        delta_val = total_budget - total_spent
+        # If Delta is negative (Over Budget), we want RED.
+        # If Delta is positive (Under Budget), we want GREEN.
+        # Default 'normal' behavior: Positive=Green, Negative=Red.
+        # We manually format the string to ensure Streamlit parses it correctly.
+        
+        c3.metric(
+            "Actual Spent", 
+            f"${total_spent:,.2f}", 
+            delta=f"{delta_val:,.2f}" # Removed the '$' inside the delta string to avoid parsing errors
+        )
         st.progress(max(0, min(100, int(savings_rate))), text=f"Savings Rate: {savings_rate:.1f}%")
 
         with col_d2:
@@ -359,7 +372,6 @@ if check_password():
                     
                     html += "</table>"
 
-                    # --- ADD CRU REIMBURSEMENT SECTION ---
                     if not cru_tx.empty:
                         html += """
                         <br><hr>
@@ -459,11 +471,23 @@ if check_password():
                             if 'Description' not in temp.columns:
                                 temp = temp.rename(columns={0: 'Date', 1: 'Amount', 4: 'Description'})
                             
+                            # SMART CSV LOGIC: 
+                            # If file has negative and positive numbers, flip sign (Debit is Neg -> make Pos)
+                            # Treat Positives as Refunds (Negative Expense)
+                            
+                            # First, clean currency chars
                             temp['Amount'] = temp['Amount'].astype(str).str.replace(r'[$,]', '', regex=True)
                             temp['Amount'] = pd.to_numeric(temp['Amount'], errors='coerce')
                             temp = temp.dropna(subset=['Amount'])
-                            temp = temp[temp['Amount'] < 0].copy()
-                            temp['Amount'] = temp['Amount'].abs()
+                            
+                            # Check if we have negative numbers (Typical Bank Format)
+                            if (temp['Amount'] < 0).any():
+                                # Invert: Negatives become Positive (Expense), Positives become Negative (Refunds)
+                                temp['Amount'] = temp['Amount'] * -1
+                            else:
+                                # All Positive? Assume they are expenses
+                                temp['Amount'] = temp['Amount'].abs()
+
                             temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
                             
                             temp = auto_categorize(temp, custom_rules)
@@ -559,21 +583,15 @@ if check_password():
                 }, use_container_width=True, num_rows="dynamic")
             
             if st.button("Save Changes"):
-                # REPLACEMENT LOGIC FOR DELETIONS
                 if view_mode == "All Transactions":
-                     # If seeing all, the editor IS the new master
                      final_df = edited_view.sort_values(by="Date", ascending=False)
                      manager.write_csv(final_df, "transactions", "Review Changes (Full Replace)")
                      st.success("Saved!"); time.sleep(1); st.rerun()
                 else:
-                     # If seeing subset, we must remove old subset and add new subset
                      indices_shown = edit_view.index
-                     # Drop original rows from master
                      tx_df = tx_df.drop(indices_shown)
-                     # Add back the edited rows (some might be missing if deleted)
                      tx_df = pd.concat([tx_df, edited_view], ignore_index=False)
                      tx_df = tx_df.sort_values(by="Date", ascending=False)
-                     
                      manager.write_csv(tx_df, "transactions", "Review Changes (Subset Replace)")
                      st.success("Saved!"); time.sleep(1); st.rerun()
 
