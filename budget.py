@@ -60,15 +60,11 @@ DEFAULT_INCOME = [
     {"Source": "Mare", "Amount": 0.0}
 ]
 
-# --- SMART BRAIN (PRE-TRAINED KEYWORDS) ---
-# This dictionary maps common keywords to your 2025 Categories
+# --- SMART BRAIN (PRE-TRAINED) ---
 SMART_DEFAULTS = {
-    # Food - Groceries
     'heb': 'Groceries', 'walmart': 'Groceries', 'kroger': 'Groceries', 
     'aldi': 'Groceries', 'trader joe': 'Groceries', 'whole foods': 'Groceries',
     'costco': 'Groceries', 'sams club': 'Groceries', 'market street': 'Groceries',
-    
-    # Food - Eating Out
     'mcdonalds': 'Eating out together', 'chick-fil-a': 'Eating out together', 
     'starbucks': 'Eating out together', 'burger king': 'Eating out together',
     'sonic': 'Eating out together', 'taco bell': 'Eating out together',
@@ -76,15 +72,11 @@ SMART_DEFAULTS = {
     'panera': 'Eating out together', 'dunkin': 'Eating out together',
     'pizza': 'Eating out together', 'doordash': 'Eating out together',
     'uber eats': 'Eating out together', 'restaurant': 'Eating out together',
-    
-    # Transportation
     'shell': 'Gas', 'exxon': 'Gas', 'chevron': 'Gas', 'texaco': 'Gas',
     '7-eleven': 'Gas', 'qt': 'Gas', 'quiktrip': 'Gas', 'buc-ee': 'Gas',
     'wawa': 'Gas', 'valero': 'Gas', 'pilot': 'Gas', 'circle k': 'Gas',
     'oil': 'Car Maintenance', 'auto': 'Car Maintenance', 'tire': 'Car Maintenance',
     'toyota': 'Car Maintenance', 'honda': 'Car Maintenance', 'mechanic': 'Car Maintenance',
-    
-    # Housing & Utilities
     'att': 'Internet/TV', 'verizon': 'Cellphone', 't-mobile': 'Cellphone',
     'spectrum': 'Internet/TV', 'comcast': 'Internet/TV', 'xfinity': 'Internet/TV',
     'netflix': 'Internet/TV', 'hulu': 'Internet/TV', 'disney': 'Internet/TV',
@@ -92,13 +84,9 @@ SMART_DEFAULTS = {
     'city of': 'Utilities', 'water': 'Utilities', 'electric': 'Utilities',
     'power': 'Utilities', 'energy': 'Utilities', 'waste': 'Utilities',
     'mortgage': 'Mortgage', 'loancare': 'Mortgage', 'mr cooper': 'Mortgage',
-    
-    # Medical
     'pharmacy': 'Medicine', 'cvs': 'Medicine', 'walgreens': 'Medicine',
     'doctor': 'Medicine', 'clinic': 'Medicine', 'health': 'Medicine',
     'chiropractor': 'Chiropractor', 'massage': 'Massage',
-    
-    # Misc
     'amazon': 'House', 'amzn': 'House', 'target': 'House', 
     'hair': 'T Haircuts', 'barber': 'T Haircuts', 'salon': 'T Haircuts',
     'pet': 'Dog Expenses', 'vet': 'Dog Expenses', 'dog': 'Dog Expenses',
@@ -187,8 +175,34 @@ class GithubManager:
                 st.toast(f"Created new file ({file_key})! ☁️", icon="✅")
             except Exception as e: st.error(f"Save Error: {e}")
 
+# --- LEARNING FUNCTION ---
+def learn_keyword(manager, keyword, category):
+    # 1. Load Rules
+    rules_df = manager.read_csv("budget_rules")
+    if rules_df.empty: return False
+    
+    # 2. Find Category Index
+    mask = rules_df['Category'] == category
+    if not mask.any(): return False
+    
+    idx = rules_df[mask].index[0]
+    
+    # 3. Parse and Append
+    current_kws = rules_df.at[idx, 'Keywords']
+    try:
+        kw_list = json.loads(current_kws) if pd.notna(current_kws) and current_kws else []
+    except:
+        kw_list = []
+        
+    clean_kw = keyword.lower().strip()
+    if clean_kw not in kw_list:
+        kw_list.append(clean_kw)
+        rules_df.at[idx, 'Keywords'] = json.dumps(kw_list)
+        manager.write_csv(rules_df, "budget_rules", f"Learned: {clean_kw} -> {category}")
+        return True
+    return False
+
 def auto_categorize(df, rules):
-    # This function now uses the massive SMART_DEFAULTS dict
     if 'Category' not in df.columns: df['Category'] = None
     if 'Nuance_Check' not in df.columns: df['Nuance_Check'] = False
     
@@ -197,21 +211,21 @@ def auto_categorize(df, rules):
         desc = str(row['Description']).lower()
         matched = False
         
-        # 1. Check User Custom Rules (from the CSV file)
+        # 1. Custom Rules
         for keyword, category in rules.items():
             if keyword in desc:
                 df.at[index, 'Category'] = category
                 matched = True
                 break
         
-        # 2. Check Smart Defaults (Hardcoded Brain)
+        # 2. Smart Defaults
         if not matched:
             for keyword, category in SMART_DEFAULTS.items():
                 if keyword in desc:
                     df.at[index, 'Category'] = category
                     break
         
-        # 3. Nuance Check (Amazon/Target often needs human eyes)
+        # 3. Nuance Check
         if "amazon" in desc or "amzn" in desc or "target" in desc:
             df.at[index, 'Nuance_Check'] = True
             
@@ -274,7 +288,6 @@ if check_password():
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
         
-        # --- TIME MACHINE (DATE FILTER) ---
         col_d1, col_d2 = st.columns([2, 1])
         with col_d1:
             if not tx_df.empty and 'Date' in tx_df.columns:
@@ -302,7 +315,6 @@ if check_password():
 
         personal_tx = dashboard_tx[dashboard_tx['Is_Cru'] == False] if not dashboard_tx.empty else dashboard_tx
         
-        # SAFE MATH HERE
         total_income = float(inc_df['Amount'].sum()) if not inc_df.empty else 0.0
         total_spent = float(personal_tx['Amount'].sum()) if not personal_tx.empty else 0.0
         total_budget = sum(targets.values())
@@ -312,14 +324,12 @@ if check_password():
         else:
             savings_rate = 0.0
         
-        # Metrics
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Income", f"${total_income:,.2f}")
         c2.metric("Total Budget", f"${total_budget:,.2f}")
         c3.metric("Actual Spent", f"${total_spent:,.2f}", delta=f"${total_budget-total_spent:,.2f}")
         st.progress(max(0, min(100, int(savings_rate))), text=f"Savings Rate: {savings_rate:.1f}%")
 
-        # --- EMAIL REPORT BUTTON ---
         with col_d2:
             st.write("") 
             if st.button("📧 Email This Report"):
@@ -407,6 +417,9 @@ if check_password():
             d_desc = st.text_input("Description", placeholder="e.g. HEB")
             is_cru = st.checkbox("Is this a Cru Expense?")
             
+            # --- THE MEMORY CHECKBOX ---
+            remember = st.checkbox(f"🧠 Remember that '{d_desc}' is always '{sel_cat}'?")
+            
             if st.button("Add Transaction", type="primary"):
                 if d_amt > 0:
                     new_row = pd.DataFrame([{
@@ -418,7 +431,15 @@ if check_password():
                         "Nuance_Check": False
                     }])
                     updated_df = pd.concat([tx_df, new_row], ignore_index=True)
+                    
+                    # 1. Save Transaction
                     manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
+                    
+                    # 2. Train Brain (If Checked)
+                    if remember and d_desc:
+                        learn_keyword(manager, d_desc, sel_cat)
+                        st.toast(f"Brain trained: {d_desc} -> {sel_cat}", icon="🧠")
+                        
                     st.success("Added!"); time.sleep(1); st.rerun()
 
         with tab_csv:
@@ -455,6 +476,21 @@ if check_password():
     # --- REVIEW ---
     elif page == "🔄 Review & Edit":
         st.header("📝 Review Transactions")
+        
+        # --- BRAIN TRAINING STATION ---
+        with st.expander("🧠 Train the Brain (Teach it new rules)"):
+            c_learn1, c_learn2, c_learn3 = st.columns([2, 2, 1])
+            learn_kw = c_learn1.text_input("If description contains...", placeholder="e.g. Netflix")
+            learn_cat = c_learn2.selectbox("Always assign to:", sorted(list(categories.keys())))
+            if c_learn3.button("Teach"):
+                if learn_kw:
+                    if learn_keyword(manager, learn_kw, learn_cat):
+                        st.success(f"Learned! Future '{learn_kw}' will be '{learn_cat}'.")
+                        time.sleep(1); st.rerun()
+                    else: st.error("Could not update rules.")
+        
+        st.divider()
+        
         view_mode = st.radio("Show:", ["Needs Review", "All Transactions"])
         mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
         edit_view = tx_df[mask].copy() if view_mode == "Needs Review" else tx_df.copy()
