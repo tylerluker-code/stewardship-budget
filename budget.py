@@ -319,23 +319,14 @@ if check_password():
         else:
             savings_rate = 0.0
         
-        # --- FIXED METRIC DISPLAY ---
+        # FIXED: Delta logic for Green/Red Arrow
+        delta_val = total_budget - total_spent
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Income", f"${total_income:,.2f}")
         c2.metric("Total Budget", f"${total_budget:,.2f}")
+        c3.metric("Actual Spent", f"${total_spent:,.2f}", delta=delta_val)
         
-        # Calculate Delta and Color
-        delta_val = total_budget - total_spent
-        # If Delta is negative (Over Budget), we want RED.
-        # If Delta is positive (Under Budget), we want GREEN.
-        # Default 'normal' behavior: Positive=Green, Negative=Red.
-        # We manually format the string to ensure Streamlit parses it correctly.
-        
-        c3.metric(
-            "Actual Spent", 
-            f"${total_spent:,.2f}", 
-            delta=f"{delta_val:,.2f}" # Removed the '$' inside the delta string to avoid parsing errors
-        )
         st.progress(max(0, min(100, int(savings_rate))), text=f"Savings Rate: {savings_rate:.1f}%")
 
         with col_d2:
@@ -471,23 +462,11 @@ if check_password():
                             if 'Description' not in temp.columns:
                                 temp = temp.rename(columns={0: 'Date', 1: 'Amount', 4: 'Description'})
                             
-                            # SMART CSV LOGIC: 
-                            # If file has negative and positive numbers, flip sign (Debit is Neg -> make Pos)
-                            # Treat Positives as Refunds (Negative Expense)
-                            
-                            # First, clean currency chars
                             temp['Amount'] = temp['Amount'].astype(str).str.replace(r'[$,]', '', regex=True)
                             temp['Amount'] = pd.to_numeric(temp['Amount'], errors='coerce')
                             temp = temp.dropna(subset=['Amount'])
-                            
-                            # Check if we have negative numbers (Typical Bank Format)
-                            if (temp['Amount'] < 0).any():
-                                # Invert: Negatives become Positive (Expense), Positives become Negative (Refunds)
-                                temp['Amount'] = temp['Amount'] * -1
-                            else:
-                                # All Positive? Assume they are expenses
-                                temp['Amount'] = temp['Amount'].abs()
-
+                            if (temp['Amount'] < 0).any(): temp['Amount'] = temp['Amount'] * -1
+                            else: temp['Amount'] = temp['Amount'].abs()
                             temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
                             
                             temp = auto_categorize(temp, custom_rules)
@@ -568,32 +547,52 @@ if check_password():
                     else: st.error("Could not update rules.")
         
         st.divider()
-        view_mode = st.radio("Show:", ["Needs Review", "All Transactions"])
+        
+        # --- NEW SORTING CONTROLS ---
+        c_view1, c_view2, c_view3 = st.columns([2, 1, 1])
+        view_mode = c_view1.radio("Show:", ["Needs Review", "All Transactions"], horizontal=True)
+        sort_col = c_view2.selectbox("Sort by:", ["Date", "Amount", "Category", "Description"], index=0)
+        sort_order = c_view3.radio("Order:", ["Newest/Highest", "Oldest/Lowest"], horizontal=True)
+        ascending = True if sort_order == "Oldest/Lowest" else False
+
+        # Prepare Data
+        if 'Date' in tx_df.columns: tx_df['Date'] = pd.to_datetime(tx_df['Date'])
+        
         mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
         edit_view = tx_df[mask].copy() if view_mode == "Needs Review" else tx_df.copy()
+        
+        if not edit_view.empty:
+            edit_view = edit_view.sort_values(by=sort_col, ascending=ascending)
             
         if edit_view.empty: st.success("Nothing to review!")
         else:
             cat_options = sorted(list(categories.keys())); cat_options.insert(0, "Business/Cru")
+            
             edited_view = st.data_editor(
-                edit_view, column_config={
+                edit_view, 
+                column_config={
+                    "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
                     "Category": st.column_config.SelectboxColumn("Category", options=cat_options),
                     "Is_Cru": st.column_config.CheckboxColumn("Cru Expense"),
-                    "Nuance_Check": st.column_config.CheckboxColumn("Review Needed")
-                }, use_container_width=True, num_rows="dynamic")
+                    "Nuance_Check": st.column_config.CheckboxColumn("Review Needed"),
+                    "Amount": st.column_config.NumberColumn("Amount", format="$%.2f")
+                }, 
+                use_container_width=True, 
+                num_rows="dynamic"
+            )
             
             if st.button("Save Changes"):
-                if view_mode == "All Transactions":
-                     final_df = edited_view.sort_values(by="Date", ascending=False)
-                     manager.write_csv(final_df, "transactions", "Review Changes (Full Replace)")
-                     st.success("Saved!"); time.sleep(1); st.rerun()
-                else:
-                     indices_shown = edit_view.index
-                     tx_df = tx_df.drop(indices_shown)
-                     tx_df = pd.concat([tx_df, edited_view], ignore_index=False)
-                     tx_df = tx_df.sort_values(by="Date", ascending=False)
-                     manager.write_csv(tx_df, "transactions", "Review Changes (Subset Replace)")
-                     st.success("Saved!"); time.sleep(1); st.rerun()
+                indices_shown = edit_view.index
+                # Drop displayed rows from master, replace with edited rows
+                remaining_df = tx_df.drop(indices_shown)
+                final_df = pd.concat([remaining_df, edited_view], ignore_index=False)
+                
+                # Format back to string for CSV
+                final_df['Date'] = final_df['Date'].dt.strftime('%Y-%m-%d')
+                final_df = final_df.sort_values(by="Date", ascending=False)
+                
+                manager.write_csv(final_df, "transactions", "Review Changes")
+                st.success("Saved!"); time.sleep(1); st.rerun()
 
     # --- SETTINGS ---
     elif page == "💰 Income & Budget":
@@ -605,7 +604,6 @@ if check_password():
         with t2:
             st.info("Edit your budget targets here.")
             
-            # --- THE MIGRATOR ---
             st.markdown("---")
             st.subheader("🛠️ Bulk Rename Tool")
             st.caption("Use this to move transactions from an old category (e.g. 'Eating Out') to a new one (e.g. 'Eating out together').")
@@ -613,7 +611,6 @@ if check_password():
             if not tx_df.empty:
                 current_used_cats = [str(x) for x in tx_df['Category'].unique() if pd.notna(x)]
                 current_used_cats.sort()
-                
                 valid_cats = sorted(list(categories.keys()))
                 
                 col_mig1, col_mig2, col_mig3 = st.columns([2, 2, 1])
