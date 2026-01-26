@@ -411,7 +411,7 @@ if check_password():
     # --- ADD TRANSACTIONS ---
     elif page == "📥 Add Transactions":
         st.header("📥 Add Transactions")
-        tab_manual, tab_csv = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload"])
+        tab_manual, tab_csv, tab_split = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload", "✂️ Split Transaction"])
         
         with tab_manual:
             all_cats = sorted(list(categories.keys()))
@@ -490,6 +490,79 @@ if check_password():
                         combined = combined.drop_duplicates(subset=['Date', 'Description', 'Amount'])
                         manager.write_csv(combined, "transactions", "Bulk Upload")
                         st.success(f"Added {len(new_data)} items!"); time.sleep(2); st.rerun()
+        
+        # --- SPLIT TRANSACTION TAB ---
+        with tab_split:
+            st.info("Split a large transaction into multiple categories (e.g., Target run -> Groceries + Clothes).")
+            
+            if tx_df.empty:
+                st.warning("No transactions available to split.")
+            else:
+                # 1. Select Transaction
+                # Create a readable label for dropdown
+                tx_df = tx_df.sort_values(by="Date", ascending=False)
+                tx_df['label'] = tx_df.apply(lambda x: f"{x['Date']} | {x['Description']} | ${x['Amount']}", axis=1)
+                
+                selected_label = st.selectbox("Select Transaction to Split", tx_df['label'].unique())
+                
+                # Get the row
+                original_row = tx_df[tx_df['label'] == selected_label].iloc[0]
+                orig_amt = float(original_row['Amount'])
+                
+                st.markdown(f"**Original Amount:** `${orig_amt:,.2f}`")
+                
+                # 2. How many splits?
+                num_splits = st.radio("Split into how many?", [2, 3, 4], horizontal=True)
+                
+                # 3. Dynamic Inputs
+                splits = []
+                running_total = 0.0
+                
+                for i in range(num_splits):
+                    c1, c2 = st.columns([1, 2])
+                    val = c1.number_input(f"Amount {i+1}", min_value=0.0, step=0.01, key=f"s_amt_{i}")
+                    cat = c2.selectbox(f"Category {i+1}", all_cats, key=f"s_cat_{i}")
+                    splits.append({"amount": val, "category": cat})
+                    running_total += val
+                
+                # 4. Math Check
+                remaining = orig_amt - running_total
+                if abs(remaining) < 0.01:
+                    st.success("✅ Math matches! Ready to split.")
+                    valid_math = True
+                else:
+                    st.error(f"❌ Amounts do not match. Remaining: ${remaining:,.2f}")
+                    valid_math = False
+                
+                # 5. Process Button
+                if st.button("✂️ Process Split", disabled=not valid_math):
+                    # Remove original
+                    # We use Date, Desc, Amount to identify (assuming uniqueness roughly)
+                    mask = (tx_df['Date'] == original_row['Date']) & \
+                           (tx_df['Description'] == original_row['Description']) & \
+                           (tx_df['Amount'] == original_row['Amount'])
+                    
+                    # Drop the old one
+                    # We need to drop only ONE instance if there are duplicates, but usually unique enough
+                    idx_to_drop = tx_df[mask].index[0]
+                    new_tx_df = tx_df.drop(idx_to_drop).drop(columns=['label'])
+                    
+                    # Create new rows
+                    new_rows = []
+                    for s in splits:
+                        new_rows.append({
+                            "Date": original_row['Date'],
+                            "Description": f"{original_row['Description']} (Split)",
+                            "Amount": s['amount'],
+                            "Category": s['category'],
+                            "Is_Cru": original_row['Is_Cru'], # Inherit Cru status? Or let user change? Keep simple for now.
+                            "Nuance_Check": False
+                        })
+                    
+                    new_tx_df = pd.concat([new_tx_df, pd.DataFrame(new_rows)], ignore_index=True)
+                    
+                    manager.write_csv(new_tx_df, "transactions", f"Split {original_row['Description']}")
+                    st.success("Transaction Split!"); time.sleep(1); st.rerun()
 
     # --- REVIEW ---
     elif page == "🔄 Review & Edit":
