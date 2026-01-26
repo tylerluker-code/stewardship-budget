@@ -2,19 +2,18 @@ Category,Group,BudgetAmount
 Giving,Charity,150.0
 Mortgage,Housing,1522.22
 Utilities,Housing,300.0
-Internet/TV,Housing,76.0
-Cellphone,Housing,50.0
+TV,Housing,40.0
 Car Insurance,Insurance,250.0
 Gas,Transportation,250.0
 Car Maintenance,Transportation,100.0
 Groceries,Food,600.0
 Eating out ,Food,150.0
 Pocket Money ,Personal,150.0
-Gifts,Miscellaneous,75.0
+Gifts,Miscellaneous,50.0
 toiletries,Miscellaneous,50.0
 etc.,Miscellaneous,50.0
 Dates,Miscellaneous,100.0
-House,Miscellaneous,100.0
+House,Miscellaneous,50.0
 Clothes,Miscellaneous,50.0
 Chiropractor,Medical,200.0
 Massage,Medical,144.0
