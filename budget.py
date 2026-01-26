@@ -20,7 +20,7 @@ FILE_PATHS = {
 
 RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org"]
 
-# --- HARDCODED DEFAULTS (2025) ---
+# --- HARDCODED DEFAULTS (2025 SIMPLIFIED) ---
 DEFAULT_BUDGET = [
     {"Group": "Charity", "Category": "Tithes", "BudgetAmount": 0.0},
     {"Group": "Charity", "Category": "Giving", "BudgetAmount": 150.0},
@@ -36,10 +36,8 @@ DEFAULT_BUDGET = [
     {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 250.0},
     {"Group": "Transportation", "Category": "Car Maintenance", "BudgetAmount": 100.0},
     {"Group": "Food", "Category": "Groceries", "BudgetAmount": 700.0},
-    {"Group": "Food", "Category": "Eating out together", "BudgetAmount": 300.0},
-    {"Group": "Food", "Category": "Eating out seperate", "BudgetAmount": 0.0},
-    {"Group": "Personal", "Category": "Pocket Money his", "BudgetAmount": 100.0},
-    {"Group": "Personal", "Category": "Pocket Money her", "BudgetAmount": 100.0},
+    {"Group": "Food", "Category": "Eating Out", "BudgetAmount": 300.0},
+    {"Group": "Personal", "Category": "Pocket Money", "BudgetAmount": 200.0},
     {"Group": "Personal", "Category": "T Haircuts", "BudgetAmount": 30.0},
     {"Group": "Miscellaneous", "Category": "Gifts", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "toiletries", "BudgetAmount": 100.0},
@@ -65,13 +63,13 @@ SMART_DEFAULTS = {
     'heb': 'Groceries', 'walmart': 'Groceries', 'kroger': 'Groceries', 
     'aldi': 'Groceries', 'trader joe': 'Groceries', 'whole foods': 'Groceries',
     'costco': 'Groceries', 'sams club': 'Groceries', 'market street': 'Groceries',
-    'mcdonalds': 'Eating out together', 'chick-fil-a': 'Eating out together', 
-    'starbucks': 'Eating out together', 'burger king': 'Eating out together',
-    'sonic': 'Eating out together', 'taco bell': 'Eating out together',
-    'chipotle': 'Eating out together', 'whataburger': 'Eating out together',
-    'panera': 'Eating out together', 'dunkin': 'Eating out together',
-    'pizza': 'Eating out together', 'doordash': 'Eating out together',
-    'uber eats': 'Eating out together', 'restaurant': 'Eating out together',
+    'mcdonalds': 'Eating Out', 'chick-fil-a': 'Eating Out', 
+    'starbucks': 'Eating Out', 'burger king': 'Eating Out',
+    'sonic': 'Eating Out', 'taco bell': 'Eating Out',
+    'chipotle': 'Eating Out', 'whataburger': 'Eating Out',
+    'panera': 'Eating Out', 'dunkin': 'Eating Out',
+    'pizza': 'Eating Out', 'doordash': 'Eating Out',
+    'uber eats': 'Eating Out', 'restaurant': 'Eating Out',
     'shell': 'Gas', 'exxon': 'Gas', 'chevron': 'Gas', 'texaco': 'Gas',
     '7-eleven': 'Gas', 'qt': 'Gas', 'quiktrip': 'Gas', 'buc-ee': 'Gas',
     'wawa': 'Gas', 'valero': 'Gas', 'pilot': 'Gas', 'circle k': 'Gas',
@@ -264,7 +262,10 @@ if check_password():
     # 2. Load Transactions
     tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
+    
+    # CLEANUP AND INDEX FIX
     tx_df = clean_currency(tx_df, "Amount")
+    tx_df = tx_df.reset_index(drop=True) # THIS FIXES THE SAVING BUG
     
     # 3. Load Income
     inc_df = manager.read_csv("income")
@@ -319,7 +320,6 @@ if check_password():
         else:
             savings_rate = 0.0
         
-        # FIXED: Delta logic for Green/Red Arrow
         delta_val = total_budget - total_spent
         
         c1, c2, c3 = st.columns(3)
@@ -548,14 +548,12 @@ if check_password():
         
         st.divider()
         
-        # --- NEW SORTING CONTROLS ---
         c_view1, c_view2, c_view3 = st.columns([2, 1, 1])
         view_mode = c_view1.radio("Show:", ["Needs Review", "All Transactions"], horizontal=True)
         sort_col = c_view2.selectbox("Sort by:", ["Date", "Amount", "Category", "Description"], index=0)
         sort_order = c_view3.radio("Order:", ["Newest/Highest", "Oldest/Lowest"], horizontal=True)
         ascending = True if sort_order == "Oldest/Lowest" else False
 
-        # Prepare Data
         if 'Date' in tx_df.columns: tx_df['Date'] = pd.to_datetime(tx_df['Date'])
         
         mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
@@ -583,14 +581,10 @@ if check_password():
             
             if st.button("Save Changes"):
                 indices_shown = edit_view.index
-                # Drop displayed rows from master, replace with edited rows
                 remaining_df = tx_df.drop(indices_shown)
                 final_df = pd.concat([remaining_df, edited_view], ignore_index=False)
-                
-                # Format back to string for CSV
                 final_df['Date'] = final_df['Date'].dt.strftime('%Y-%m-%d')
                 final_df = final_df.sort_values(by="Date", ascending=False)
-                
                 manager.write_csv(final_df, "transactions", "Review Changes")
                 st.success("Saved!"); time.sleep(1); st.rerun()
 
@@ -604,27 +598,41 @@ if check_password():
         with t2:
             st.info("Edit your budget targets here.")
             
+            # --- THE CONSOLIDATOR ---
             st.markdown("---")
-            st.subheader("🛠️ Bulk Rename Tool")
-            st.caption("Use this to move transactions from an old category (e.g. 'Eating Out') to a new one (e.g. 'Eating out together').")
+            st.subheader("✨ Consolidate Categories")
+            st.caption("One-click fix to rename all 'Eating out Together/Separate' to 'Eating Out', and 'Pocket Money His/Her' to 'Pocket Money'.")
             
-            if not tx_df.empty:
-                current_used_cats = [str(x) for x in tx_df['Category'].unique() if pd.notna(x)]
-                current_used_cats.sort()
-                valid_cats = sorted(list(categories.keys()))
+            if st.button("✨ Consolidate Categories"):
+                # 1. Update Rules File
+                new_rules = pd.DataFrame(DEFAULT_BUDGET)
+                new_rules["Keywords"] = ""
+                manager.write_csv(new_rules, "budget_rules", "Consolidate Rules")
                 
-                col_mig1, col_mig2, col_mig3 = st.columns([2, 2, 1])
-                old_cat_input = col_mig1.selectbox("Find all transactions labeled:", current_used_cats)
-                new_cat_input = col_mig2.selectbox("And rename them to:", valid_cats)
+                # 2. Update Transactions
+                changes = {
+                    "Eating out together": "Eating Out",
+                    "Eating out seperate": "Eating Out",
+                    "Eating Out His": "Eating Out",
+                    "Eating Out Hers": "Eating Out",
+                    "Pocket Money his": "Pocket Money",
+                    "Pocket Money her": "Pocket Money",
+                    "Pocket Money His": "Pocket Money",
+                    "Pocket Money Hers": "Pocket Money"
+                }
                 
-                if col_mig3.button("Rename"):
-                    count = len(tx_df[tx_df['Category'] == old_cat_input])
-                    if count > 0:
-                        tx_df.loc[tx_df['Category'] == old_cat_input, 'Category'] = new_cat_input
-                        manager.write_csv(tx_df, "transactions", f"Migrate {old_cat_input} -> {new_cat_input}")
-                        st.success(f"Moved {count} transactions!"); time.sleep(1); st.rerun()
-                    else:
-                        st.warning("No transactions found with that category.")
+                count = 0
+                for old, new in changes.items():
+                    mask = tx_df['Category'] == old
+                    if mask.any():
+                        tx_df.loc[mask, 'Category'] = new
+                        count += mask.sum()
+                
+                if count > 0:
+                    manager.write_csv(tx_df, "transactions", "Consolidate Transactions")
+                    st.success(f"Updated {count} transactions and rules!"); time.sleep(2); st.rerun()
+                else:
+                    st.info("Rules updated, but no matching transactions found to rename.")
             st.markdown("---")
 
             st.markdown("---")
