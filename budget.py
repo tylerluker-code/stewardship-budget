@@ -58,7 +58,7 @@ DEFAULT_INCOME = [
     {"Source": "Mare", "Amount": 0.0}
 ]
 
-# --- SMART BRAIN (PRE-TRAINED) ---
+# --- SMART BRAIN ---
 SMART_DEFAULTS = {
     'heb': 'Groceries', 'walmart': 'Groceries', 'kroger': 'Groceries', 
     'aldi': 'Groceries', 'trader joe': 'Groceries', 'whole foods': 'Groceries',
@@ -230,6 +230,59 @@ def clean_currency(df, col_name):
         df[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0.0)
     return df
 
+# --- SESSION STATE FOR DUPLICATES ---
+if 'conflict_queue' not in st.session_state: st.session_state.conflict_queue = []
+if 'processed_new_rows' not in st.session_state: st.session_state.processed_new_rows = []
+if 'master_indices_to_drop' not in st.session_state: st.session_state.master_indices_to_drop = []
+
+# --- DUPLICATE CHECKER LOGIC ---
+def detect_duplicates(new_df, master_df):
+    conflicts = []
+    clean_rows = []
+    
+    if master_df.empty:
+        return [], new_df.to_dict('records')
+
+    # Convert dates to datetime for comparison
+    master_df['DateObj'] = pd.to_datetime(master_df['Date'])
+    
+    for _, new_row in new_df.iterrows():
+        new_date = pd.to_datetime(new_row['Date'])
+        new_amt = float(new_row['Amount'])
+        
+        # 1. Exact Match Check (Date + Amt + Desc) - Auto Drop
+        exact_match = master_df[
+            (master_df['DateObj'] == new_date) & 
+            (master_df['Amount'] == new_amt) & 
+            (master_df['Description'] == new_row['Description'])
+        ]
+        
+        if not exact_match.empty:
+            continue # Skip silently (it's exactly the same)
+
+        # 2. Fuzzy Match (Same Amt + Date +/- 2 days)
+        date_min = new_date - timedelta(days=2)
+        date_max = new_date + timedelta(days=2)
+        
+        fuzzy_match = master_df[
+            (master_df['Amount'] == new_amt) & 
+            (master_df['DateObj'] >= date_min) & 
+            (master_df['DateObj'] <= date_max)
+        ]
+        
+        if not fuzzy_match.empty:
+            # Conflict found!
+            existing_row = fuzzy_match.iloc[0] # Take the first match
+            conflicts.append({
+                'new': new_row.to_dict(),
+                'existing': existing_row.to_dict(),
+                'existing_idx': existing_row.name # The index in master_df
+            })
+        else:
+            clean_rows.append(new_row.to_dict())
+            
+    return conflicts, clean_rows
+
 # --- MAIN APP ---
 if check_password():
     manager = GithubManager()
@@ -262,10 +315,8 @@ if check_password():
     # 2. Load Transactions
     tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
-    
-    # CLEANUP AND INDEX FIX
     tx_df = clean_currency(tx_df, "Amount")
-    tx_df = tx_df.reset_index(drop=True) # THIS FIXES THE SAVING BUG
+    tx_df = tx_df.reset_index(drop=True)
     
     # 3. Load Income
     inc_df = manager.read_csv("income")
@@ -408,128 +459,203 @@ if check_password():
     # --- ADD TRANSACTIONS ---
     elif page == "📥 Add Transactions":
         st.header("📥 Add Transactions")
-        tab_manual, tab_csv, tab_split = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload", "✂️ Split Transaction"])
         
-        with tab_manual:
-            all_cats = sorted(list(categories.keys()))
-            sel_cat = st.selectbox("Category", all_cats, index=0) if all_cats else None
+        # --- CONFLICT RESOLVER UI ---
+        if st.session_state.conflict_queue:
+            st.warning(f"⚠️ Potential Duplicate Found! ({len(st.session_state.conflict_queue)} remaining)")
             
-            if sel_cat:
-                b_val = targets.get(sel_cat, 0.0)
-                if not tx_df.empty:
-                    tx_df['Is_Cru'] = tx_df['Is_Cru'].astype(bool)
-                    curr_s = tx_df[(tx_df['Category'] == sel_cat) & (tx_df['Is_Cru'] == False)]['Amount'].sum()
-                else: curr_s = 0.0
-                rem_val = b_val - curr_s
-                
-                c1, c2 = st.columns(2)
-                c1.metric(f"Budget: {sel_cat}", f"${b_val:,.0f}")
-                c2.metric(f"Available", f"${rem_val:,.2f}", delta_color="normal" if rem_val > 0 else "inverse")
-
+            conflict = st.session_state.conflict_queue[0]
+            existing = conflict['existing']
+            new_item = conflict['new']
+            
             c1, c2 = st.columns(2)
-            d_date = c1.date_input("Date", datetime.now())
-            d_amt = c2.number_input("Amount ($)", min_value=0.0, step=0.01)
-            d_desc = st.text_input("Description", placeholder="e.g. HEB")
-            is_cru = st.checkbox("Is this a Cru Expense?")
-            remember = st.checkbox(f"🧠 Remember that '{d_desc}' is always '{sel_cat}'?")
-            
-            if st.button("Add Transaction", type="primary"):
-                if d_amt > 0:
-                    new_row = pd.DataFrame([{
-                        "Date": d_date.strftime("%Y-%m-%d"),
-                        "Description": d_desc,
-                        "Amount": d_amt,
-                        "Category": sel_cat,
-                        "Is_Cru": is_cru,
-                        "Nuance_Check": False
-                    }])
-                    updated_df = pd.concat([tx_df, new_row], ignore_index=True)
-                    manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
-                    if remember and d_desc:
-                        learn_keyword(manager, d_desc, sel_cat)
-                        st.toast(f"Brain trained: {d_desc} -> {sel_cat}", icon="🧠")
-                    st.success("Added!"); time.sleep(1); st.rerun()
-
-        with tab_csv:
-            uploaded_files = st.file_uploader("Choose CSV files", accept_multiple_files=True, type='csv')
-            if st.button("Process CSVs"):
-                if uploaded_files:
-                    new_dfs = []
-                    for f in uploaded_files:
-                        try:
-                            temp = pd.read_csv(f, header=None)
-                            if len(temp.columns) < 5: temp = pd.read_csv(f)
-                            if 'Description' not in temp.columns:
-                                temp = temp.rename(columns={0: 'Date', 1: 'Amount', 4: 'Description'})
-                            
-                            temp['Amount'] = temp['Amount'].astype(str).str.replace(r'[$,]', '', regex=True)
-                            temp['Amount'] = pd.to_numeric(temp['Amount'], errors='coerce')
-                            temp = temp.dropna(subset=['Amount'])
-                            if (temp['Amount'] < 0).any(): temp['Amount'] = temp['Amount'] * -1
-                            else: temp['Amount'] = temp['Amount'].abs()
-                            temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
-                            
-                            temp = auto_categorize(temp, custom_rules)
-                            new_dfs.append(temp)
-                        except Exception as e: st.error(f"Error {f.name}: {e}")
+            with c1:
+                st.info("🏛️ Existing Entry")
+                st.markdown(f"**Date:** {existing['Date']}<br>**Desc:** {existing['Description']}<br>**Amt:** ${existing['Amount']}", unsafe_allow_html=True)
+                if st.button("Keep Existing (Discard New)"):
+                    st.session_state.conflict_queue.pop(0)
+                    st.rerun()
                     
-                    if new_dfs:
-                        new_data = pd.concat(new_dfs)
-                        combined = pd.concat([tx_df, new_data], ignore_index=True)
-                        combined = combined.drop_duplicates(subset=['Date', 'Description', 'Amount'])
-                        manager.write_csv(combined, "transactions", "Bulk Upload")
-                        st.success(f"Added {len(new_data)} items!"); time.sleep(2); st.rerun()
-
-        with tab_split:
-            st.info("Split a large transaction into multiple categories.")
-            if tx_df.empty:
-                st.warning("No transactions available to split.")
-            else:
+            with c2:
+                st.success("🆕 New Entry")
+                st.markdown(f"**Date:** {new_item['Date']}<br>**Desc:** {new_item['Description']}<br>**Amt:** ${new_item['Amount']}", unsafe_allow_html=True)
+                if st.button("Replace with New"):
+                    st.session_state.master_indices_to_drop.append(conflict['existing_idx'])
+                    st.session_state.processed_new_rows.append(new_item)
+                    st.session_state.conflict_queue.pop(0)
+                    st.rerun()
+            
+            if st.button("Keep Both (They are different)"):
+                st.session_state.processed_new_rows.append(new_item)
+                st.session_state.conflict_queue.pop(0)
+                st.rerun()
+        
+        # --- SAVING LOGIC ---
+        elif st.session_state.processed_new_rows or st.session_state.master_indices_to_drop:
+            # We have finished the queue, now execute the batch save
+            with st.spinner("Finalizing changes..."):
+                # 1. Drop replaced rows from master
+                if st.session_state.master_indices_to_drop:
+                    tx_df = tx_df.drop(st.session_state.master_indices_to_drop)
+                
+                # 2. Add new rows
+                if st.session_state.processed_new_rows:
+                    new_data_df = pd.DataFrame(st.session_state.processed_new_rows)
+                    tx_df = pd.concat([tx_df, new_data_df], ignore_index=True)
+                
+                # 3. Sort and Save
+                tx_df['Date'] = pd.to_datetime(tx_df['Date']) # Ensure sortability
                 tx_df = tx_df.sort_values(by="Date", ascending=False)
-                tx_df['label'] = tx_df.apply(lambda x: f"{x['Date']} | {x['Description']} | ${x['Amount']}", axis=1)
-                selected_label = st.selectbox("Select Transaction to Split", tx_df['label'].unique())
+                tx_df['Date'] = tx_df['Date'].dt.strftime('%Y-%m-%d')
                 
-                original_row = tx_df[tx_df['label'] == selected_label].iloc[0]
-                orig_amt = float(original_row['Amount'])
-                st.markdown(f"**Original Amount:** `${orig_amt:,.2f}`")
+                manager.write_csv(tx_df, "transactions", "Batch Upload with De-Duping")
                 
-                num_splits = st.radio("Split into how many?", [2, 3, 4], horizontal=True)
-                splits = []
-                running_total = 0.0
+                # 4. Clear Session State
+                st.session_state.conflict_queue = []
+                st.session_state.processed_new_rows = []
+                st.session_state.master_indices_to_drop = []
                 
-                for i in range(num_splits):
-                    c1, c2 = st.columns([1, 2])
-                    val = c1.number_input(f"Amount {i+1}", min_value=0.0, step=0.01, key=f"s_amt_{i}")
-                    cat = c2.selectbox(f"Category {i+1}", all_cats, key=f"s_cat_{i}")
-                    splits.append({"amount": val, "category": cat})
-                    running_total += val
+                st.success("All transactions processed and saved!")
+                time.sleep(2)
+                st.rerun()
+
+        # --- NORMAL TABS ---
+        else:
+            tab_manual, tab_csv, tab_split = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload", "✂️ Split Transaction"])
+            
+            with tab_manual:
+                all_cats = sorted(list(categories.keys()))
+                sel_cat = st.selectbox("Category", all_cats, index=0) if all_cats else None
                 
-                remaining = orig_amt - running_total
-                if abs(remaining) < 0.01:
-                    st.success("✅ Math matches! Ready to split.")
-                    if st.button("✂️ Process Split"):
-                        mask = (tx_df['Date'] == original_row['Date']) & \
-                               (tx_df['Description'] == original_row['Description']) & \
-                               (tx_df['Amount'] == original_row['Amount'])
-                        idx_to_drop = tx_df[mask].index[0]
-                        new_tx_df = tx_df.drop(idx_to_drop).drop(columns=['label'])
+                if sel_cat:
+                    b_val = targets.get(sel_cat, 0.0)
+                    if not tx_df.empty:
+                        tx_df['Is_Cru'] = tx_df['Is_Cru'].astype(bool)
+                        curr_s = tx_df[(tx_df['Category'] == sel_cat) & (tx_df['Is_Cru'] == False)]['Amount'].sum()
+                    else: curr_s = 0.0
+                    rem_val = b_val - curr_s
+                    
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Budget: {sel_cat}", f"${b_val:,.0f}")
+                    c2.metric(f"Available", f"${rem_val:,.2f}", delta_color="normal" if rem_val > 0 else "inverse")
+
+                c1, c2 = st.columns(2)
+                d_date = c1.date_input("Date", datetime.now())
+                d_amt = c2.number_input("Amount ($)", min_value=0.0, step=0.01)
+                d_desc = st.text_input("Description", placeholder="e.g. HEB")
+                is_cru = st.checkbox("Is this a Cru Expense?")
+                remember = st.checkbox(f"🧠 Remember that '{d_desc}' is always '{sel_cat}'?")
+                
+                if st.button("Add Transaction", type="primary"):
+                    if d_amt > 0:
+                        new_row = pd.DataFrame([{
+                            "Date": d_date.strftime("%Y-%m-%d"),
+                            "Description": d_desc,
+                            "Amount": d_amt,
+                            "Category": sel_cat,
+                            "Is_Cru": is_cru,
+                            "Nuance_Check": False
+                        }])
                         
-                        new_rows = []
-                        for s in splits:
-                            new_rows.append({
-                                "Date": original_row['Date'],
-                                "Description": f"{original_row['Description']} (Split)",
-                                "Amount": s['amount'],
-                                "Category": s['category'],
-                                "Is_Cru": original_row['Is_Cru'],
-                                "Nuance_Check": False
-                            })
+                        # --- TRIGGER DUPLICATE DETECTION FOR MANUAL ---
+                        conflicts, clean = detect_duplicates(new_row, tx_df)
                         
-                        new_tx_df = pd.concat([new_tx_df, pd.DataFrame(new_rows)], ignore_index=True)
-                        manager.write_csv(new_tx_df, "transactions", f"Split {original_row['Description']}")
-                        st.success("Transaction Split!"); time.sleep(1); st.rerun()
+                        if conflicts:
+                            st.session_state.conflict_queue = conflicts
+                            st.session_state.processed_new_rows = [] # Clear previous junk
+                            st.rerun()
+                        else:
+                            # Direct Save
+                            updated_df = pd.concat([tx_df, new_row], ignore_index=True)
+                            manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
+                            if remember and d_desc:
+                                learn_keyword(manager, d_desc, sel_cat)
+                            st.success("Added!"); time.sleep(1); st.rerun()
+
+            with tab_csv:
+                uploaded_files = st.file_uploader("Choose CSV files", accept_multiple_files=True, type='csv')
+                if st.button("Process CSVs"):
+                    if uploaded_files:
+                        all_new_rows = []
+                        for f in uploaded_files:
+                            try:
+                                temp = pd.read_csv(f, header=None)
+                                if len(temp.columns) < 5: temp = pd.read_csv(f)
+                                if 'Description' not in temp.columns:
+                                    temp = temp.rename(columns={0: 'Date', 1: 'Amount', 4: 'Description'})
+                                
+                                temp['Amount'] = temp['Amount'].astype(str).str.replace(r'[$,]', '', regex=True)
+                                temp['Amount'] = pd.to_numeric(temp['Amount'], errors='coerce')
+                                temp = temp.dropna(subset=['Amount'])
+                                if (temp['Amount'] < 0).any(): temp['Amount'] = temp['Amount'] * -1
+                                else: temp['Amount'] = temp['Amount'].abs()
+                                temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
+                                
+                                temp = auto_categorize(temp, custom_rules)
+                                all_new_rows.append(temp)
+                            except Exception as e: st.error(f"Error {f.name}: {e}")
+                        
+                        if all_new_rows:
+                            big_new_df = pd.concat(all_new_rows, ignore_index=True)
+                            big_new_df['Date'] = pd.to_datetime(big_new_df['Date']).dt.strftime('%Y-%m-%d')
+                            
+                            # --- TRIGGER DUPLICATE DETECTION FOR CSV ---
+                            conflicts, clean_rows = detect_duplicates(big_new_df, tx_df)
+                            
+                            st.session_state.conflict_queue = conflicts
+                            st.session_state.processed_new_rows = clean_rows # Queue the clean ones immediately
+                            st.rerun()
+
+            with tab_split:
+                st.info("Split a large transaction into multiple categories.")
+                if tx_df.empty:
+                    st.warning("No transactions available to split.")
                 else:
-                    st.error(f"❌ Amounts do not match. Remaining: ${remaining:,.2f}")
+                    tx_df = tx_df.sort_values(by="Date", ascending=False)
+                    tx_df['label'] = tx_df.apply(lambda x: f"{x['Date']} | {x['Description']} | ${x['Amount']}", axis=1)
+                    selected_label = st.selectbox("Select Transaction to Split", tx_df['label'].unique())
+                    
+                    original_row = tx_df[tx_df['label'] == selected_label].iloc[0]
+                    orig_amt = float(original_row['Amount'])
+                    st.markdown(f"**Original Amount:** `${orig_amt:,.2f}`")
+                    
+                    num_splits = st.radio("Split into how many?", [2, 3, 4], horizontal=True)
+                    splits = []
+                    running_total = 0.0
+                    
+                    for i in range(num_splits):
+                        c1, c2 = st.columns([1, 2])
+                        val = c1.number_input(f"Amount {i+1}", min_value=0.0, step=0.01, key=f"s_amt_{i}")
+                        cat = c2.selectbox(f"Category {i+1}", all_cats, key=f"s_cat_{i}")
+                        splits.append({"amount": val, "category": cat})
+                        running_total += val
+                    
+                    remaining = orig_amt - running_total
+                    if abs(remaining) < 0.01:
+                        st.success("✅ Math matches! Ready to split.")
+                        if st.button("✂️ Process Split"):
+                            mask = (tx_df['Date'] == original_row['Date']) & \
+                                   (tx_df['Description'] == original_row['Description']) & \
+                                   (tx_df['Amount'] == original_row['Amount'])
+                            idx_to_drop = tx_df[mask].index[0]
+                            new_tx_df = tx_df.drop(idx_to_drop).drop(columns=['label'])
+                            
+                            new_rows = []
+                            for s in splits:
+                                new_rows.append({
+                                    "Date": original_row['Date'],
+                                    "Description": f"{original_row['Description']} (Split)",
+                                    "Amount": s['amount'],
+                                    "Category": s['category'],
+                                    "Is_Cru": original_row['Is_Cru'],
+                                    "Nuance_Check": False
+                                })
+                            
+                            new_tx_df = pd.concat([new_tx_df, pd.DataFrame(new_rows)], ignore_index=True)
+                            manager.write_csv(new_tx_df, "transactions", f"Split {original_row['Description']}")
+                            st.success("Transaction Split!"); time.sleep(1); st.rerun()
+                    else:
+                        st.error(f"❌ Amounts do not match. Remaining: ${remaining:,.2f}")
 
     # --- REVIEW ---
     elif page == "🔄 Review & Edit":
@@ -604,12 +730,10 @@ if check_password():
             st.caption("One-click fix to rename all 'Eating out Together/Separate' to 'Eating Out', and 'Pocket Money His/Her' to 'Pocket Money'.")
             
             if st.button("✨ Consolidate Categories"):
-                # 1. Update Rules File
                 new_rules = pd.DataFrame(DEFAULT_BUDGET)
                 new_rules["Keywords"] = ""
                 manager.write_csv(new_rules, "budget_rules", "Consolidate Rules")
                 
-                # 2. Update Transactions
                 changes = {
                     "Eating out together": "Eating Out",
                     "Eating out seperate": "Eating Out",
@@ -633,6 +757,27 @@ if check_password():
                     st.success(f"Updated {count} transactions and rules!"); time.sleep(2); st.rerun()
                 else:
                     st.info("Rules updated, but no matching transactions found to rename.")
+            st.markdown("---")
+
+            st.markdown("---")
+            st.subheader("🛠️ Bulk Rename Tool")
+            if not tx_df.empty:
+                current_used_cats = [str(x) for x in tx_df['Category'].unique() if pd.notna(x)]
+                current_used_cats.sort()
+                valid_cats = sorted(list(categories.keys()))
+                
+                col_mig1, col_mig2, col_mig3 = st.columns([2, 2, 1])
+                old_cat_input = col_mig1.selectbox("Find all transactions labeled:", current_used_cats)
+                new_cat_input = col_mig2.selectbox("And rename them to:", valid_cats)
+                
+                if col_mig3.button("Rename"):
+                    count = len(tx_df[tx_df['Category'] == old_cat_input])
+                    if count > 0:
+                        tx_df.loc[tx_df['Category'] == old_cat_input, 'Category'] = new_cat_input
+                        manager.write_csv(tx_df, "transactions", f"Migrate {old_cat_input} -> {new_cat_input}")
+                        st.success(f"Moved {count} transactions!"); time.sleep(1); st.rerun()
+                    else:
+                        st.warning("No transactions found with that category.")
             st.markdown("---")
 
             st.markdown("---")
