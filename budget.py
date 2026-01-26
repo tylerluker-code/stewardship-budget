@@ -3,29 +3,23 @@ import pandas as pd
 import numpy as np
 import json
 import time
-from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
 from github import Github
 from io import StringIO
 
 # --- CONFIGURATION ---
-BRANCH = "main" # or "master", check your repo
+BRANCH = "main"
 FILE_PATHS = {
     "transactions": "data/transactions.csv",
     "budget_rules": "data/budget_rules.csv",
     "income": "data/income.csv"
 }
 
-# --- HARDCODED DEFAULTS ---
-DEFAULT_BUDGET = [
-    {"Group": "Giving", "Category": "Tithe", "BudgetAmount": 500.0},
-    {"Group": "Housing", "Category": "Mortgage/Rent", "BudgetAmount": 1500.0},
-    {"Group": "Food", "Category": "Groceries", "BudgetAmount": 600.0},
-    {"Group": "Food", "Category": "Eating Out", "BudgetAmount": 150.0},
-    {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 200.0},
-    {"Group": "Lifestyle", "Category": "Entertainment", "BudgetAmount": 100.0},
-    {"Group": "Savings", "Category": "Emergency Fund", "BudgetAmount": 200.0},
-    {"Group": "Business", "Category": "Business/Cru", "BudgetAmount": 0.0}
-]
+# Recipients List
+RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org", "mareluker@gmail.com"]
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
@@ -56,7 +50,29 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- GITHUB DATA MANAGER ---
+# --- EMAILER ---
+def send_email_report(subject, body_html):
+    sender_email = st.secrets["EMAIL_SENDER"]
+    sender_password = st.secrets["EMAIL_PASSWORD"]
+    
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = ", ".join(RECIPIENTS)
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body_html, 'html'))
+    
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, RECIPIENTS, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Email Failed: {e}")
+        return False
+
+# --- GITHUB MANAGER ---
 class GithubManager:
     def __init__(self):
         try:
@@ -66,34 +82,26 @@ class GithubManager:
             st.error(f"GitHub Connection Error: {e}")
 
     def read_csv(self, file_key):
-        """Reads a CSV from the repo, returns DataFrame"""
         path = FILE_PATHS[file_key]
         try:
             file_content = self.repo.get_contents(path, ref=BRANCH)
             decoded = file_content.decoded_content.decode("utf-8")
             if not decoded.strip(): return pd.DataFrame()
             return pd.read_csv(StringIO(decoded))
-        except Exception:
-            # File doesn't exist yet
-            return pd.DataFrame()
+        except: return pd.DataFrame()
 
     def write_csv(self, df, file_key, message="Update data"):
-        """Writes DataFrame to CSV in the repo"""
         path = FILE_PATHS[file_key]
         csv_content = df.to_csv(index=False)
-        
         try:
-            # Check if file exists to update it
             file_content = self.repo.get_contents(path, ref=BRANCH)
             self.repo.update_file(path, message, csv_content, file_content.sha, branch=BRANCH)
             st.toast(f"Saved to GitHub ({file_key})! ☁️", icon="✅")
         except:
-            # If not, create it
             try:
                 self.repo.create_file(path, message, csv_content, branch=BRANCH)
                 st.toast(f"Created new file ({file_key})! ☁️", icon="✅")
-            except Exception as e:
-                st.error(f"Save Error: {e}")
+            except Exception as e: st.error(f"Save Error: {e}")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
@@ -120,22 +128,13 @@ def auto_categorize(df, rules, defaults):
 if check_password():
     manager = GithubManager()
     
-    # 1. Load Rules (Initialize if Missing)
+    # Load Data
     rules_df = manager.read_csv("budget_rules")
+    if rules_df.empty: st.warning("No Budget Rules found.")
     
-    if rules_df.empty:
-        st.info("Initializing GitHub Storage...")
-        rules_df = pd.DataFrame(DEFAULT_BUDGET)
-        rules_df["Keywords"] = ""
-        manager.write_csv(rules_df, "budget_rules", "Init Default Rules")
-        time.sleep(1)
-        st.rerun()
-
-    # Parse Rules
     categories = {}
     targets = {}
     custom_rules = {}
-    
     for i, row in rules_df.iterrows():
         if pd.notna(row['Category']):
             categories[row['Category']] = row['Group']
@@ -146,11 +145,9 @@ if check_password():
                     for k in kws: custom_rules[k] = row['Category']
                 except: pass
 
-    # 2. Load Transactions
     tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
-
-    # 3. Load Income
+    
     inc_df = manager.read_csv("income")
     if inc_df.empty: inc_df = pd.DataFrame(columns=["Source", "Amount"])
 
@@ -162,39 +159,94 @@ if check_password():
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
         
-        # Date Filter
-        with st.expander("📅 Filter Date Range"):
+        # --- TIME MACHINE (DATE FILTER) ---
+        col_d1, col_d2 = st.columns([2, 1])
+        with col_d1:
             if not tx_df.empty and 'Date' in tx_df.columns:
                 tx_df['Date'] = pd.to_datetime(tx_df['Date'])
-                min_date = tx_df['Date'].min().date()
-                max_date = tx_df['Date'].max().date()
-                d_range = st.date_input("Select Range", [min_date, max_date])
+                
+                # Default to current month
+                today = datetime.now()
+                first_day = today.replace(day=1)
+                
+                # Check if session state has date, else default
+                if 'date_range' not in st.session_state:
+                    st.session_state.date_range = (first_day.date(), today.date())
+
+                d_range = st.date_input("📅 Select Report Period (History Viewer)", 
+                                      st.session_state.date_range)
                 
                 if len(d_range) == 2:
-                    mask = (tx_df['Date'].dt.date >= d_range[0]) & (tx_df['Date'].dt.date <= d_range[1])
+                    start_date, end_date = d_range
+                    mask = (tx_df['Date'].dt.date >= start_date) & (tx_df['Date'].dt.date <= end_date)
                     dashboard_tx = tx_df[mask]
+                    report_period = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
                 else:
                     dashboard_tx = tx_df
+                    report_period = "All Time"
             else:
                 dashboard_tx = tx_df
+                report_period = "No Data"
 
         personal_tx = dashboard_tx[dashboard_tx['Is_Cru'] == False] if not dashboard_tx.empty else dashboard_tx
         total_income = inc_df['Amount'].sum() if not inc_df.empty else 0.0
         total_spent = personal_tx['Amount'].sum() if not personal_tx.empty else 0.0
         total_budget = sum(targets.values())
+        savings_rate = ((total_income - total_spent) / total_income) * 100 if total_income > 0 else 0
         
+        # Metrics
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Income", f"${total_income:,.2f}")
-        c2.metric("Planned Budget", f"${total_budget:,.2f}")
+        c2.metric("Total Budget", f"${total_budget:,.2f}")
         c3.metric("Actual Spent", f"${total_spent:,.2f}", delta=f"${total_budget-total_spent:,.2f}")
-        
-        if total_income > 0:
-            rate = ((total_income - total_spent) / total_income) * 100
-            st.progress(max(0, min(100, int(rate))), text=f"Savings Rate: {rate:.1f}%")
+        st.progress(max(0, min(100, int(savings_rate))), text=f"Savings Rate: {savings_rate:.1f}%")
+
+        # --- EMAIL REPORT BUTTON ---
+        with col_d2:
+            st.write("") # Spacer
+            if st.button("📧 Email This Report"):
+                with st.spinner("Sending..."):
+                    # Build HTML Report
+                    html = f"""
+                    <h2>🌸 Stewardship Report: {report_period}</h2>
+                    <p><b>Income:</b> ${total_income:,.2f}<br>
+                    <b>Spent:</b> ${total_spent:,.2f}<br>
+                    <b>Savings Rate:</b> {savings_rate:.1f}%</p>
+                    <hr>
+                    <h3>Category Breakdown</h3>
+                    <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+                    <tr style="background-color: #D8BFD8;"><th>Category</th><th>Budget</th><th>Spent</th><th>Remaining</th></tr>
+                    """
+                    
+                    # Group Logic for Email
+                    actuals = personal_tx.groupby('Category')['Amount'].sum()
+                    groups = {}
+                    active_cats = set(targets.keys()) | set(actuals.index)
+                    for c in active_cats:
+                        g = categories.get(c, "Uncategorized")
+                        if g not in groups: groups[g] = []
+                        groups[g].append(c)
+                    
+                    for g in sorted(groups.keys()):
+                        html += f"<tr><td colspan='4' style='background-color: #F0F0F0;'><b>{g}</b></td></tr>"
+                        for cat in groups[g]:
+                            b = targets.get(cat, 0.0)
+                            s = actuals.get(cat, 0.0)
+                            r = b - s
+                            color = "red" if r < 0 else "green"
+                            html += f"<tr><td>{cat}</td><td>${b:,.0f}</td><td>${s:,.0f}</td><td style='color:{color};'>${r:,.0f}</td></tr>"
+                    
+                    html += "</table><br><p><i>Sent from your Stewardship App 🌸</i></p>"
+                    
+                    if send_email_report(f"Monthly Budget: {report_period}", html):
+                        st.success("Sent to Tyler, Marianna, and Mare!")
+                    else:
+                        st.error("Check secrets configuration.")
 
         st.divider()
-        st.subheader("🌿 Budget Health")
+        st.subheader("🌿 Category Breakdown")
         if not personal_tx.empty:
+            # Re-calc for display
             actuals = personal_tx.groupby('Category')['Amount'].sum()
             groups = {}
             active_cats = set(targets.keys()) | set(actuals.index)
@@ -216,36 +268,29 @@ if check_password():
     # --- ADD TRANSACTIONS ---
     elif page == "📥 Add Transactions":
         st.header("📥 Add Transactions")
-        tab_manual, tab_csv = st.tabs(["✍️ Manual Entry (Single)", "📂 Bulk Upload (CSV)"])
+        tab_manual, tab_csv = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload"])
         
         with tab_manual:
-            st.info("Use this when you are at the store to check budget and add expense.")
             all_cats = sorted(list(categories.keys()))
-            if not all_cats:
-                st.warning("No categories found!")
-                sel_cat = None
-            else:
-                sel_cat = st.selectbox("Category", all_cats, index=0)
+            sel_cat = st.selectbox("Category", all_cats, index=0) if all_cats else None
             
             if sel_cat:
                 b_val = targets.get(sel_cat, 0.0)
                 if not tx_df.empty:
                     tx_df['Is_Cru'] = tx_df['Is_Cru'].astype(bool)
                     curr_s = tx_df[(tx_df['Category'] == sel_cat) & (tx_df['Is_Cru'] == False)]['Amount'].sum()
-                else:
-                    curr_s = 0.0
+                else: curr_s = 0.0
                 rem_val = b_val - curr_s
                 
-                col_m1, col_m2 = st.columns(2)
-                col_m1.metric(f"Budget for {sel_cat}", f"${b_val:,.0f}")
-                col_m2.metric(f"⚠️ Remaining Available", f"${rem_val:,.2f}", delta_color="normal" if rem_val > 0 else "inverse")
-                st.divider()
+                c1, c2 = st.columns(2)
+                c1.metric(f"Budget: {sel_cat}", f"${b_val:,.0f}")
+                c2.metric(f"Available", f"${rem_val:,.2f}", delta_color="normal" if rem_val > 0 else "inverse")
 
             c1, c2 = st.columns(2)
             d_date = c1.date_input("Date", datetime.now())
             d_amt = c2.number_input("Amount ($)", min_value=0.0, step=0.01)
-            d_desc = st.text_input("Description (Vendor)", placeholder="e.g. HEB, Shell")
-            is_cru = st.checkbox("Is this a Cru Expense? (Reimbursable)")
+            d_desc = st.text_input("Description", placeholder="e.g. HEB")
+            is_cru = st.checkbox("Is this a Cru Expense?")
             
             if st.button("Add Transaction", type="primary"):
                 if d_amt > 0:
@@ -259,16 +304,11 @@ if check_password():
                     }])
                     updated_df = pd.concat([tx_df, new_row], ignore_index=True)
                     manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
-                    st.success("Transaction Added!")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.warning("Please enter an amount.")
+                    st.success("Added!"); time.sleep(1); st.rerun()
 
         with tab_csv:
-            st.info("Upload your weekly bank export here.")
             uploaded_files = st.file_uploader("Choose CSV files", accept_multiple_files=True, type='csv')
-            if st.button("Process & Merge CSVs"):
+            if st.button("Process CSVs"):
                 if uploaded_files:
                     new_dfs = []
                     for f in uploaded_files:
@@ -283,53 +323,36 @@ if check_password():
                             temp = temp.dropna(subset=['Amount'])
                             temp = temp[temp['Amount'] < 0].copy()
                             temp['Amount'] = temp['Amount'].abs()
-                            temp['Category'] = None
-                            temp['Is_Cru'] = False
-                            temp['Nuance_Check'] = False
+                            temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
                             
-                            defaults = {
-                                'donut': 'Eating Out', 'shell': 'Gas', 'heb': 'Groceries', 
-                                'walmart': 'Groceries', 'netflix': 'Entertainment'
-                            }
+                            defaults = {'donut': 'Eating Out', 'shell': 'Gas', 'heb': 'Groceries', 'walmart': 'Groceries'}
                             temp = auto_categorize(temp, custom_rules, defaults)
                             new_dfs.append(temp)
-                        except Exception as e:
-                            st.error(f"Error parsing {f.name}: {e}")
+                        except Exception as e: st.error(f"Error {f.name}: {e}")
                     
                     if new_dfs:
                         new_data = pd.concat(new_dfs)
                         combined = pd.concat([tx_df, new_data], ignore_index=True)
                         combined = combined.drop_duplicates(subset=['Date', 'Description', 'Amount'])
                         manager.write_csv(combined, "transactions", "Bulk Upload")
-                        st.success(f"Added {len(new_data)} transactions! Go to 'Review' tab.")
+                        st.success(f"Added {len(new_data)} items!"); time.sleep(2); st.rerun()
 
     # --- REVIEW ---
     elif page == "🔄 Review & Edit":
         st.header("📝 Review Transactions")
-        view_mode = st.radio("Show:", ["Needs Review (Ambiguous)", "All Transactions"])
-        
-        if view_mode == "Needs Review (Ambiguous)":
-            mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
-            edit_view = tx_df[mask].copy()
-        else:
-            edit_view = tx_df.copy()
+        view_mode = st.radio("Show:", ["Needs Review", "All Transactions"])
+        mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
+        edit_view = tx_df[mask].copy() if view_mode == "Needs Review" else tx_df.copy()
             
-        if edit_view.empty:
-            st.success("Nothing to review! Great job.")
+        if edit_view.empty: st.success("Nothing to review!")
         else:
-            cat_options = sorted(list(categories.keys()))
-            cat_options.insert(0, "Business/Cru")
-            
+            cat_options = sorted(list(categories.keys())); cat_options.insert(0, "Business/Cru")
             edited_view = st.data_editor(
-                edit_view,
-                column_config={
+                edit_view, column_config={
                     "Category": st.column_config.SelectboxColumn("Category", options=cat_options),
                     "Is_Cru": st.column_config.CheckboxColumn("Cru Expense"),
                     "Nuance_Check": st.column_config.CheckboxColumn("Review Needed")
-                },
-                use_container_width=True,
-                num_rows="dynamic"
-            )
+                }, use_container_width=True, num_rows="dynamic")
             
             if st.button("Save Changes"):
                 tx_df.update(edited_view)
@@ -339,13 +362,9 @@ if check_password():
     elif page == "💰 Income & Budget":
         st.header("Settings")
         t1, t2 = st.tabs(["Income", "Budget Categories"])
-        
         with t1:
             edited_inc = st.data_editor(inc_df, num_rows="dynamic", use_container_width=True)
             if st.button("Save Income"): manager.write_csv(edited_inc, "income", "Update Income")
-        
         with t2:
-            st.info("Edit your budget targets here.")
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
-            if st.button("Save Categories"):
-                manager.write_csv(edited_rules, "budget_rules", "Update Rules")
+            if st.button("Save Categories"): manager.write_csv(edited_rules, "budget_rules", "Update Rules")
