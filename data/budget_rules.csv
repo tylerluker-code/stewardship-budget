@@ -12,7 +12,6 @@ Car Insurance,Insurance,250.0
 Gas,Transportation,250.0
 Car Maintenance,Transportation,100.0
 Groceries,Food,700.0
-Eating Out,Food,300.0
 Pocket Money,Personal,200.0
 T Haircuts,Personal,30.0
 Gifts,Miscellaneous,100.0
@@ -31,3 +30,4 @@ TV,Housing,76.0
 Felicity,Baby,50.0
 Mirren,Baby,50.0
 Felicity Formula,Baby,350.0
+Eating out,Groceries,150.0
