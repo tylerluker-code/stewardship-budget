@@ -18,62 +18,40 @@ FILE_PATHS = {
     "income": "data/income.csv"
 }
 
-# Recipients List
 RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org", "mareluker@gmail.com"]
 
-# --- HARDCODED DEFAULTS (FROM 2025 SHEET) ---
+# --- HARDCODED DEFAULTS (2025) ---
 DEFAULT_BUDGET = [
-    # CHARITY
     {"Group": "Charity", "Category": "Tithes", "BudgetAmount": 0.0},
     {"Group": "Charity", "Category": "Giving", "BudgetAmount": 150.0},
     {"Group": "Charity", "Category": "SM savings", "BudgetAmount": 0.0},
-    
-    # SAVINGS
     {"Group": "Savings", "Category": "HOUSE", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Car", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Dog", "BudgetAmount": 0.0},
-    
-    # HOUSING
     {"Group": "Housing", "Category": "Mortgage", "BudgetAmount": 1522.22},
     {"Group": "Housing", "Category": "Utilities", "BudgetAmount": 300.0},
     {"Group": "Housing", "Category": "Internet/TV", "BudgetAmount": 76.0},
     {"Group": "Housing", "Category": "Cellphone", "BudgetAmount": 50.0},
-    
-    # INSURANCE
     {"Group": "Insurance", "Category": "Car Insurance", "BudgetAmount": 250.0},
-    
-    # TRANSPORTATION
     {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 250.0},
     {"Group": "Transportation", "Category": "Car Maintenance", "BudgetAmount": 100.0},
-    
-    # FOOD
     {"Group": "Food", "Category": "Groceries", "BudgetAmount": 700.0},
     {"Group": "Food", "Category": "Eating out together", "BudgetAmount": 300.0},
     {"Group": "Food", "Category": "Eating out seperate", "BudgetAmount": 0.0},
-    
-    # PERSONAL
     {"Group": "Personal", "Category": "Pocket Money his", "BudgetAmount": 100.0},
     {"Group": "Personal", "Category": "Pocket Money her", "BudgetAmount": 100.0},
     {"Group": "Personal", "Category": "T Haircuts", "BudgetAmount": 30.0},
-    
-    # MISCELLANEOUS
     {"Group": "Miscellaneous", "Category": "Gifts", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "toiletries", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "etc.", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "Dates", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "House", "BudgetAmount": 100.0},
     {"Group": "Miscellaneous", "Category": "Clothes", "BudgetAmount": 50.0},
-    
-    # MEDICAL
     {"Group": "Medical", "Category": "Chiropractor", "BudgetAmount": 100.0},
     {"Group": "Medical", "Category": "Massage", "BudgetAmount": 144.0},
     {"Group": "Medical", "Category": "Medicine", "BudgetAmount": 50.0},
     {"Group": "Medical", "Category": "wellw/rae", "BudgetAmount": 0.0},
-    
-    # DOG
     {"Group": "Dog", "Category": "Dog Expenses", "BudgetAmount": 50.0},
-    
-    # BABY
     {"Group": "Baby", "Category": "Childcare", "BudgetAmount": 200.0}
 ]
 
@@ -185,12 +163,24 @@ def auto_categorize(df, rules, defaults):
             df.at[index, 'Nuance_Check'] = True
     return df
 
+# --- HELPER: CLEAN CURRENCY ---
+def clean_currency(df, col_name):
+    if col_name in df.columns:
+        # Force to string, remove $ and , then convert to numeric
+        df[col_name] = df[col_name].astype(str).str.replace(r'[$,]', '', regex=True)
+        df[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0.0)
+    return df
+
 # --- MAIN APP ---
 if check_password():
     manager = GithubManager()
     
-    # Load Data
+    # 1. Load Rules
     rules_df = manager.read_csv("budget_rules")
+    
+    # Clean Rules Amounts
+    rules_df = clean_currency(rules_df, "BudgetAmount")
+    
     if rules_df.empty:
         st.info("Initializing Default Budget Rules...")
         rules_df = pd.DataFrame(DEFAULT_BUDGET)
@@ -205,19 +195,27 @@ if check_password():
     for i, row in rules_df.iterrows():
         if pd.notna(row['Category']):
             categories[row['Category']] = row['Group']
-            targets[row['Category']] = row['BudgetAmount']
+            targets[row['Category']] = float(row['BudgetAmount'])
             if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
                 try:
                     kws = json.loads(row['Keywords'])
                     for k in kws: custom_rules[k] = row['Category']
                 except: pass
 
+    # 2. Load Transactions
     tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
     
+    # CLEAN TRANSACTIONS
+    tx_df = clean_currency(tx_df, "Amount")
+    
+    # 3. Load Income
     inc_df = manager.read_csv("income")
+    
+    # CLEAN INCOME
+    inc_df = clean_currency(inc_df, "Amount")
+    
     if inc_df.empty:
-        # Auto-init Income if missing
         inc_df = pd.DataFrame(DEFAULT_INCOME)
         manager.write_csv(inc_df, "income", "Init 2025 Income")
 
@@ -256,10 +254,16 @@ if check_password():
                 report_period = "No Data"
 
         personal_tx = dashboard_tx[dashboard_tx['Is_Cru'] == False] if not dashboard_tx.empty else dashboard_tx
-        total_income = inc_df['Amount'].sum() if not inc_df.empty else 0.0
-        total_spent = personal_tx['Amount'].sum() if not personal_tx.empty else 0.0
+        
+        # SAFE MATH HERE
+        total_income = float(inc_df['Amount'].sum()) if not inc_df.empty else 0.0
+        total_spent = float(personal_tx['Amount'].sum()) if not personal_tx.empty else 0.0
         total_budget = sum(targets.values())
-        savings_rate = ((total_income - total_spent) / total_income) * 100 if total_income > 0 else 0
+        
+        if total_income > 0:
+            savings_rate = ((total_income - total_spent) / total_income) * 100
+        else:
+            savings_rate = 0.0
         
         # Metrics
         c1, c2, c3 = st.columns(3)
@@ -432,10 +436,9 @@ if check_password():
         with t2:
             st.info("Edit your budget targets here.")
             
-            # --- THE RESET BUTTON ---
             st.markdown("---")
             col_warn, col_btn = st.columns([3, 1])
-            col_warn.warning("Need to apply the new 2025 defaults? Click this button to overwrite your current categories.")
+            col_warn.warning("Click here if you need to force-load the new 2025 Budget Categories.")
             if col_btn.button("⚠️ Reset to 2025 Defaults"):
                  new_rules = pd.DataFrame(DEFAULT_BUDGET)
                  new_rules["Keywords"] = ""
