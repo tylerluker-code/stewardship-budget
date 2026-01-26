@@ -10,9 +10,7 @@ from datetime import datetime
 # --- HARDCODED DEFAULTS ---
 DEFAULT_BUDGET = [
     {"Group": "Giving", "Category": "Tithe", "BudgetAmount": 500.0},
-    {"Group": "Giving", "Category": "Offerings", "BudgetAmount": 100.0},
     {"Group": "Housing", "Category": "Mortgage/Rent", "BudgetAmount": 1500.0},
-    {"Group": "Housing", "Category": "Utilities", "BudgetAmount": 250.0},
     {"Group": "Food", "Category": "Groceries", "BudgetAmount": 600.0},
     {"Group": "Food", "Category": "Eating Out", "BudgetAmount": 150.0},
     {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 200.0},
@@ -43,6 +41,21 @@ def check_password():
     
     st.title("🔒 Login")
     pwd = st.text_input("Enter Family Password", type="password")
+    
+    # --- DEBUGGER (Visible only on login) ---
+    with st.expander("🔧 Connection Debugger"):
+        try:
+            if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+                st.success("✅ Secrets File Found")
+                if "service_account" in st.secrets["connections"]["gsheets"]:
+                    st.success("✅ Service Account Section Found")
+                else:
+                    st.error("❌ Service Account Section Missing")
+            else:
+                st.error("❌ 'connections.gsheets' section missing in Secrets")
+        except:
+            st.error("❌ Could not read secrets")
+
     if st.button("Log In"):
         if pwd == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
@@ -51,34 +64,36 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- DATA MANAGER (FORCE SERVICE ACCOUNT) ---
+# --- DATA MANAGER (FORCE AUTH) ---
 class CloudBudgetManager:
     def __init__(self):
-        # We explicitly pass the type="service_account" to the connection
-        # This forces it to look for the [connections.gsheets] block in secrets
-        self.conn = st.connection("gsheets", type=GSheetsConnection)
+        # 1. Manually grab the service account dict from secrets
+        try:
+            raw_creds = st.secrets["connections"]["gsheets"]["service_account"]
+            # 2. Pass it explicitly to the connection
+            self.conn = st.connection(
+                "gsheets", 
+                type=GSheetsConnection, 
+                service_account=raw_creds
+            )
+        except Exception as e:
+            st.error(f"Secrets Error: {e}")
+            self.conn = st.connection("gsheets", type=GSheetsConnection)
 
     def get_data(self, worksheet_name):
         try:
-            # use_cache=False is the new way to ensure fresh data in newer versions
-            # if that fails, we fallback to ttl=0
             return self.conn.read(worksheet=worksheet_name, ttl=0)
-        except Exception as e:
+        except:
             return pd.DataFrame()
 
     def update_data(self, df, worksheet_name):
         try:
-            # Crucial: We must ensure the dataframe is not empty before writing
-            if df.empty:
-                st.warning(f"Attempted to write empty data to {worksheet_name}")
-                return
-
+            if df.empty: return
             self.conn.update(worksheet=worksheet_name, data=df)
             st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
         except Exception as e:
-            st.error(f"⚠️ Critical Error updating '{worksheet_name}'.")
-            st.error(f"Details: {str(e)}")
-            st.info("Troubleshooting: Ensure secrets.toml has [connections.gsheets] properly formatted.")
+            st.error(f"Write Error on '{worksheet_name}': {str(e)}")
+            st.info("Try changing your Google Sheet permissions to 'Restricted' (only shared with the bot).")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
@@ -105,7 +120,6 @@ def auto_categorize(df, rules, defaults):
 if check_password():
     manager = CloudBudgetManager()
     
-    # 1. Load Rules
     st.caption("🔄 Syncing with Cloud...")
     rules_df = manager.get_data("BudgetRules")
     
@@ -118,7 +132,7 @@ if check_password():
             time.sleep(2)
             st.rerun()
         except Exception as e:
-            st.warning(f"Could not initialize defaults: {e}")
+            st.warning(f"Init Error: {e}")
 
     categories = {} 
     targets = {}    
@@ -135,11 +149,9 @@ if check_password():
                         for k in kws: custom_rules[k] = row['Category']
                     except: pass
 
-    # 2. Load Transactions
     tx_df = manager.get_data("Transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
 
-    # 3. Load Income
     inc_df = manager.get_data("Income")
     if inc_df.empty: inc_df = pd.DataFrame(columns=["Source", "Amount"])
 
