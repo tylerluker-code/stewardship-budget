@@ -51,26 +51,34 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- DATA MANAGER (ROBUST) ---
+# --- DATA MANAGER (FORCE SERVICE ACCOUNT) ---
 class CloudBudgetManager:
     def __init__(self):
+        # We explicitly pass the type="service_account" to the connection
+        # This forces it to look for the [connections.gsheets] block in secrets
         self.conn = st.connection("gsheets", type=GSheetsConnection)
-        
+
     def get_data(self, worksheet_name):
         try:
+            # use_cache=False is the new way to ensure fresh data in newer versions
+            # if that fails, we fallback to ttl=0
             return self.conn.read(worksheet=worksheet_name, ttl=0)
         except Exception as e:
-            # If read fails, return empty DF but don't crash yet
             return pd.DataFrame()
 
     def update_data(self, df, worksheet_name):
         try:
+            # Crucial: We must ensure the dataframe is not empty before writing
+            if df.empty:
+                st.warning(f"Attempted to write empty data to {worksheet_name}")
+                return
+
             self.conn.update(worksheet=worksheet_name, data=df)
             st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
         except Exception as e:
             st.error(f"⚠️ Critical Error updating '{worksheet_name}'.")
             st.error(f"Details: {str(e)}")
-            st.info("Troubleshooting: 1. Check tab names in Google Sheet. 2. Verify 'budget-bot' email is Editor.")
+            st.info("Troubleshooting: Ensure secrets.toml has [connections.gsheets] properly formatted.")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
@@ -97,18 +105,20 @@ def auto_categorize(df, rules, defaults):
 if check_password():
     manager = CloudBudgetManager()
     
-    # 1. Load Rules with Fallback
+    # 1. Load Rules
     st.caption("🔄 Syncing with Cloud...")
     rules_df = manager.get_data("BudgetRules")
     
     if rules_df.empty:
-        # If empty, we try to initialize, but wrapped in try/except to catch permission errors cleanly
         try:
+            st.info("Initializing Default Budget Rules...")
             rules_df = pd.DataFrame(DEFAULT_BUDGET)
             rules_df["Keywords"] = ""
             manager.update_data(rules_df, "BudgetRules")
-        except:
-            st.warning("Could not initialize defaults. Is the sheet shared with the bot?")
+            time.sleep(2)
+            st.rerun()
+        except Exception as e:
+            st.warning(f"Could not initialize defaults: {e}")
 
     categories = {} 
     targets = {}    
@@ -141,7 +151,6 @@ if check_password():
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
         
-        # Date Filter
         with st.expander("📅 Filter Date Range"):
             if not tx_df.empty and 'Date' in tx_df.columns:
                 tx_df['Date'] = pd.to_datetime(tx_df['Date'])
