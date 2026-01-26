@@ -60,6 +60,51 @@ DEFAULT_INCOME = [
     {"Source": "Mare", "Amount": 0.0}
 ]
 
+# --- SMART BRAIN (PRE-TRAINED KEYWORDS) ---
+# This dictionary maps common keywords to your 2025 Categories
+SMART_DEFAULTS = {
+    # Food - Groceries
+    'heb': 'Groceries', 'walmart': 'Groceries', 'kroger': 'Groceries', 
+    'aldi': 'Groceries', 'trader joe': 'Groceries', 'whole foods': 'Groceries',
+    'costco': 'Groceries', 'sams club': 'Groceries', 'market street': 'Groceries',
+    
+    # Food - Eating Out
+    'mcdonalds': 'Eating out together', 'chick-fil-a': 'Eating out together', 
+    'starbucks': 'Eating out together', 'burger king': 'Eating out together',
+    'sonic': 'Eating out together', 'taco bell': 'Eating out together',
+    'chipotle': 'Eating out together', 'whataburger': 'Eating out together',
+    'panera': 'Eating out together', 'dunkin': 'Eating out together',
+    'pizza': 'Eating out together', 'doordash': 'Eating out together',
+    'uber eats': 'Eating out together', 'restaurant': 'Eating out together',
+    
+    # Transportation
+    'shell': 'Gas', 'exxon': 'Gas', 'chevron': 'Gas', 'texaco': 'Gas',
+    '7-eleven': 'Gas', 'qt': 'Gas', 'quiktrip': 'Gas', 'buc-ee': 'Gas',
+    'wawa': 'Gas', 'valero': 'Gas', 'pilot': 'Gas', 'circle k': 'Gas',
+    'oil': 'Car Maintenance', 'auto': 'Car Maintenance', 'tire': 'Car Maintenance',
+    'toyota': 'Car Maintenance', 'honda': 'Car Maintenance', 'mechanic': 'Car Maintenance',
+    
+    # Housing & Utilities
+    'att': 'Internet/TV', 'verizon': 'Cellphone', 't-mobile': 'Cellphone',
+    'spectrum': 'Internet/TV', 'comcast': 'Internet/TV', 'xfinity': 'Internet/TV',
+    'netflix': 'Internet/TV', 'hulu': 'Internet/TV', 'disney': 'Internet/TV',
+    'spotify': 'Internet/TV', 'apple': 'Internet/TV', 'hbo': 'Internet/TV',
+    'city of': 'Utilities', 'water': 'Utilities', 'electric': 'Utilities',
+    'power': 'Utilities', 'energy': 'Utilities', 'waste': 'Utilities',
+    'mortgage': 'Mortgage', 'loancare': 'Mortgage', 'mr cooper': 'Mortgage',
+    
+    # Medical
+    'pharmacy': 'Medicine', 'cvs': 'Medicine', 'walgreens': 'Medicine',
+    'doctor': 'Medicine', 'clinic': 'Medicine', 'health': 'Medicine',
+    'chiropractor': 'Chiropractor', 'massage': 'Massage',
+    
+    # Misc
+    'amazon': 'House', 'amzn': 'House', 'target': 'House', 
+    'hair': 'T Haircuts', 'barber': 'T Haircuts', 'salon': 'T Haircuts',
+    'pet': 'Dog Expenses', 'vet': 'Dog Expenses', 'dog': 'Dog Expenses',
+    'chewy': 'Dog Expenses', 'daycare': 'Childcare', 'school': 'Childcare'
+}
+
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
 
@@ -142,31 +187,39 @@ class GithubManager:
                 st.toast(f"Created new file ({file_key})! ☁️", icon="✅")
             except Exception as e: st.error(f"Save Error: {e}")
 
-def auto_categorize(df, rules, defaults):
+def auto_categorize(df, rules):
+    # This function now uses the massive SMART_DEFAULTS dict
     if 'Category' not in df.columns: df['Category'] = None
     if 'Nuance_Check' not in df.columns: df['Nuance_Check'] = False
+    
     for index, row in df.iterrows():
         if pd.notna(row['Category']): continue
         desc = str(row['Description']).lower()
         matched = False
+        
+        # 1. Check User Custom Rules (from the CSV file)
         for keyword, category in rules.items():
             if keyword in desc:
                 df.at[index, 'Category'] = category
                 matched = True
                 break
+        
+        # 2. Check Smart Defaults (Hardcoded Brain)
         if not matched:
-            for keyword, category in defaults.items():
+            for keyword, category in SMART_DEFAULTS.items():
                 if keyword in desc:
                     df.at[index, 'Category'] = category
                     break
+        
+        # 3. Nuance Check (Amazon/Target often needs human eyes)
         if "amazon" in desc or "amzn" in desc or "target" in desc:
             df.at[index, 'Nuance_Check'] = True
+            
     return df
 
 # --- HELPER: CLEAN CURRENCY ---
 def clean_currency(df, col_name):
     if col_name in df.columns:
-        # Force to string, remove $ and , then convert to numeric
         df[col_name] = df[col_name].astype(str).str.replace(r'[$,]', '', regex=True)
         df[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0.0)
     return df
@@ -177,8 +230,6 @@ if check_password():
     
     # 1. Load Rules
     rules_df = manager.read_csv("budget_rules")
-    
-    # Clean Rules Amounts
     rules_df = clean_currency(rules_df, "BudgetAmount")
     
     if rules_df.empty:
@@ -205,14 +256,10 @@ if check_password():
     # 2. Load Transactions
     tx_df = manager.read_csv("transactions")
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
-    
-    # CLEAN TRANSACTIONS
     tx_df = clean_currency(tx_df, "Amount")
     
     # 3. Load Income
     inc_df = manager.read_csv("income")
-    
-    # CLEAN INCOME
     inc_df = clean_currency(inc_df, "Amount")
     
     if inc_df.empty:
@@ -393,8 +440,8 @@ if check_password():
                             temp['Amount'] = temp['Amount'].abs()
                             temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
                             
-                            defaults = {'donut': 'Eating Out', 'shell': 'Gas', 'heb': 'Groceries', 'walmart': 'Groceries'}
-                            temp = auto_categorize(temp, custom_rules, defaults)
+                            # USE SMART AUTO-CATEGORIZE
+                            temp = auto_categorize(temp, custom_rules)
                             new_dfs.append(temp)
                         except Exception as e: st.error(f"Error {f.name}: {e}")
                     
