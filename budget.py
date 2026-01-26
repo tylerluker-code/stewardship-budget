@@ -21,6 +21,67 @@ FILE_PATHS = {
 # Recipients List
 RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org", "mareluker@gmail.com"]
 
+# --- HARDCODED DEFAULTS (FROM 2025 SHEET) ---
+DEFAULT_BUDGET = [
+    # CHARITY
+    {"Group": "Charity", "Category": "Tithes", "BudgetAmount": 0.0},
+    {"Group": "Charity", "Category": "Giving", "BudgetAmount": 150.0},
+    {"Group": "Charity", "Category": "SM savings", "BudgetAmount": 0.0},
+    
+    # SAVINGS
+    {"Group": "Savings", "Category": "HOUSE", "BudgetAmount": 0.0},
+    {"Group": "Savings", "Category": "Car", "BudgetAmount": 0.0},
+    {"Group": "Savings", "Category": "Dog", "BudgetAmount": 0.0},
+    
+    # HOUSING
+    {"Group": "Housing", "Category": "Mortgage", "BudgetAmount": 1522.22},
+    {"Group": "Housing", "Category": "Utilities", "BudgetAmount": 300.0},
+    {"Group": "Housing", "Category": "Internet/TV", "BudgetAmount": 76.0},
+    {"Group": "Housing", "Category": "Cellphone", "BudgetAmount": 50.0},
+    
+    # INSURANCE
+    {"Group": "Insurance", "Category": "Car Insurance", "BudgetAmount": 250.0},
+    
+    # TRANSPORTATION
+    {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 250.0},
+    {"Group": "Transportation", "Category": "Car Maintenance", "BudgetAmount": 100.0},
+    
+    # FOOD
+    {"Group": "Food", "Category": "Groceries", "BudgetAmount": 700.0},
+    {"Group": "Food", "Category": "Eating out together", "BudgetAmount": 300.0},
+    {"Group": "Food", "Category": "Eating out seperate", "BudgetAmount": 0.0},
+    
+    # PERSONAL
+    {"Group": "Personal", "Category": "Pocket Money his", "BudgetAmount": 100.0},
+    {"Group": "Personal", "Category": "Pocket Money her", "BudgetAmount": 100.0},
+    {"Group": "Personal", "Category": "T Haircuts", "BudgetAmount": 30.0},
+    
+    # MISCELLANEOUS
+    {"Group": "Miscellaneous", "Category": "Gifts", "BudgetAmount": 100.0},
+    {"Group": "Miscellaneous", "Category": "toiletries", "BudgetAmount": 100.0},
+    {"Group": "Miscellaneous", "Category": "etc.", "BudgetAmount": 100.0},
+    {"Group": "Miscellaneous", "Category": "Dates", "BudgetAmount": 100.0},
+    {"Group": "Miscellaneous", "Category": "House", "BudgetAmount": 100.0},
+    {"Group": "Miscellaneous", "Category": "Clothes", "BudgetAmount": 50.0},
+    
+    # MEDICAL
+    {"Group": "Medical", "Category": "Chiropractor", "BudgetAmount": 100.0},
+    {"Group": "Medical", "Category": "Massage", "BudgetAmount": 144.0},
+    {"Group": "Medical", "Category": "Medicine", "BudgetAmount": 50.0},
+    {"Group": "Medical", "Category": "wellw/rae", "BudgetAmount": 0.0},
+    
+    # DOG
+    {"Group": "Dog", "Category": "Dog Expenses", "BudgetAmount": 50.0},
+    
+    # BABY
+    {"Group": "Baby", "Category": "Childcare", "BudgetAmount": 200.0}
+]
+
+DEFAULT_INCOME = [
+    {"Source": "Tyler", "Amount": 6128.0},
+    {"Source": "Mare", "Amount": 0.0}
+]
+
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
 
@@ -130,7 +191,13 @@ if check_password():
     
     # Load Data
     rules_df = manager.read_csv("budget_rules")
-    if rules_df.empty: st.warning("No Budget Rules found.")
+    if rules_df.empty:
+        st.info("Initializing Default Budget Rules...")
+        rules_df = pd.DataFrame(DEFAULT_BUDGET)
+        rules_df["Keywords"] = ""
+        manager.write_csv(rules_df, "budget_rules", "Init 2025 Rules")
+        time.sleep(1)
+        st.rerun()
     
     categories = {}
     targets = {}
@@ -149,7 +216,10 @@ if check_password():
     if tx_df.empty: tx_df = pd.DataFrame(columns=["Date", "Description", "Amount", "Category", "Is_Cru", "Nuance_Check"])
     
     inc_df = manager.read_csv("income")
-    if inc_df.empty: inc_df = pd.DataFrame(columns=["Source", "Amount"])
+    if inc_df.empty:
+        # Auto-init Income if missing
+        inc_df = pd.DataFrame(DEFAULT_INCOME)
+        manager.write_csv(inc_df, "income", "Init 2025 Income")
 
     # --- SIDEBAR ---
     st.sidebar.title("🌸 Menu")
@@ -164,12 +234,9 @@ if check_password():
         with col_d1:
             if not tx_df.empty and 'Date' in tx_df.columns:
                 tx_df['Date'] = pd.to_datetime(tx_df['Date'])
-                
-                # Default to current month
                 today = datetime.now()
                 first_day = today.replace(day=1)
                 
-                # Check if session state has date, else default
                 if 'date_range' not in st.session_state:
                     st.session_state.date_range = (first_day.date(), today.date())
 
@@ -203,10 +270,9 @@ if check_password():
 
         # --- EMAIL REPORT BUTTON ---
         with col_d2:
-            st.write("") # Spacer
+            st.write("") 
             if st.button("📧 Email This Report"):
                 with st.spinner("Sending..."):
-                    # Build HTML Report
                     html = f"""
                     <h2>🌸 Stewardship Report: {report_period}</h2>
                     <p><b>Income:</b> ${total_income:,.2f}<br>
@@ -218,7 +284,6 @@ if check_password():
                     <tr style="background-color: #D8BFD8;"><th>Category</th><th>Budget</th><th>Spent</th><th>Remaining</th></tr>
                     """
                     
-                    # Group Logic for Email
                     actuals = personal_tx.groupby('Category')['Amount'].sum()
                     groups = {}
                     active_cats = set(targets.keys()) | set(actuals.index)
@@ -246,7 +311,6 @@ if check_password():
         st.divider()
         st.subheader("🌿 Category Breakdown")
         if not personal_tx.empty:
-            # Re-calc for display
             actuals = personal_tx.groupby('Category')['Amount'].sum()
             groups = {}
             active_cats = set(targets.keys()) | set(actuals.index)
@@ -366,5 +430,19 @@ if check_password():
             edited_inc = st.data_editor(inc_df, num_rows="dynamic", use_container_width=True)
             if st.button("Save Income"): manager.write_csv(edited_inc, "income", "Update Income")
         with t2:
+            st.info("Edit your budget targets here.")
+            
+            # --- THE RESET BUTTON ---
+            st.markdown("---")
+            col_warn, col_btn = st.columns([3, 1])
+            col_warn.warning("Need to apply the new 2025 defaults? Click this button to overwrite your current categories.")
+            if col_btn.button("⚠️ Reset to 2025 Defaults"):
+                 new_rules = pd.DataFrame(DEFAULT_BUDGET)
+                 new_rules["Keywords"] = ""
+                 manager.write_csv(new_rules, "budget_rules", "Force Reset to 2025 Defaults")
+                 time.sleep(1)
+                 st.rerun()
+            st.markdown("---")
+            
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
             if st.button("Save Categories"): manager.write_csv(edited_rules, "budget_rules", "Update Rules")
