@@ -22,7 +22,6 @@ DEFAULT_BUDGET = [
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
 
-# --- CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFF0F5; }
@@ -42,20 +41,6 @@ def check_password():
     st.title("🔒 Login")
     pwd = st.text_input("Enter Family Password", type="password")
     
-    # --- DEBUGGER (Visible only on login) ---
-    with st.expander("🔧 Connection Debugger"):
-        try:
-            if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-                st.success("✅ Secrets File Found")
-                if "service_account" in st.secrets["connections"]["gsheets"]:
-                    st.success("✅ Service Account Section Found")
-                else:
-                    st.error("❌ Service Account Section Missing")
-            else:
-                st.error("❌ 'connections.gsheets' section missing in Secrets")
-        except:
-            st.error("❌ Could not read secrets")
-
     if st.button("Log In"):
         if pwd == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
@@ -64,21 +49,20 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- DATA MANAGER (FORCE AUTH) ---
+# --- DATA MANAGER (FINAL FIX) ---
 class CloudBudgetManager:
     def __init__(self):
-        # 1. Manually grab the service account dict from secrets
+        # We access the secrets directly to convert AttrDict to a standard dict
+        # This solves the "Hashing" error because standard dicts are handleable
         try:
-            raw_creds = st.secrets["connections"]["gsheets"]["service_account"]
-            # 2. Pass it explicitly to the connection
+            raw_creds = dict(st.secrets["connections"]["gsheets"]["service_account"])
             self.conn = st.connection(
                 "gsheets", 
                 type=GSheetsConnection, 
                 service_account=raw_creds
             )
         except Exception as e:
-            st.error(f"Secrets Error: {e}")
-            self.conn = st.connection("gsheets", type=GSheetsConnection)
+            st.error(f"Initialization Error: {e}")
 
     def get_data(self, worksheet_name):
         try:
@@ -93,7 +77,6 @@ class CloudBudgetManager:
             st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
         except Exception as e:
             st.error(f"Write Error on '{worksheet_name}': {str(e)}")
-            st.info("Try changing your Google Sheet permissions to 'Restricted' (only shared with the bot).")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
