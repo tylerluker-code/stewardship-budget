@@ -1,30 +1,31 @@
-Group,Category,BudgetAmount,Keywords
-Charity,Tithes,0.0,
-Charity,Giving,150.0,
-Charity,SM savings,0.0,
-Savings,HOUSE,0.0,
-Savings,Car,0.0,
-Savings,Dog,0.0,
-Housing,Mortgage,1522.22,
-Housing,Utilities,300.0,
-Housing,Internet/TV,76.0,
-Housing,Cellphone,50.0,
-Insurance,Car Insurance,250.0,
-Transportation,Gas,250.0,
-Transportation,Car Maintenance,100.0,
-Food,Groceries,700.0,
-Food,Eating Out,300.0,
-Personal,Pocket Money,200.0,
-Personal,T Haircuts,30.0,
-Miscellaneous,Gifts,100.0,
-Miscellaneous,toiletries,100.0,
-Miscellaneous,etc.,100.0,
-Miscellaneous,Dates,100.0,
-Miscellaneous,House,100.0,
-Miscellaneous,Clothes,50.0,
-Medical,Chiropractor,100.0,
-Medical,Massage,144.0,
-Medical,Medicine,50.0,
-Medical,wellw/rae,0.0,
-Dog,Dog Expenses,50.0,
-Baby,Childcare,200.0,
+Category,Group,BudgetAmount
+Tithes,Charity,0.0
+Giving,Charity,150.0
+SM savings,Charity,0.0
+HOUSE,Savings,0.0
+Car,Savings,0.0
+Dog,Savings,0.0
+Mortgage,Housing,1522.22
+Utilities,Housing,300.0
+Internet/TV,Housing,76.0
+Cellphone,Housing,50.0
+Car Insurance,Insurance,250.0
+Gas,Transportation,250.0
+Car Maintenance,Transportation,100.0
+Groceries,Food,700.0
+Eating Out,Food,300.0
+Pocket Money,Personal,200.0
+T Haircuts,Personal,30.0
+Gifts,Miscellaneous,100.0
+toiletries,Miscellaneous,100.0
+etc.,Miscellaneous,100.0
+Dates,Miscellaneous,100.0
+House,Miscellaneous,100.0
+Clothes,Miscellaneous,50.0
+Chiropractor,Medical,100.0
+Massage,Medical,144.0
+Medicine,Medical,50.0
+wellw/rae,Medical,0.0
+Dog Expenses,Dog,50.0
+Childcare,Baby,200.0
+TV,Housing,76.0
