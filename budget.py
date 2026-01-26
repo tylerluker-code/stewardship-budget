@@ -177,17 +177,14 @@ class GithubManager:
 
 # --- LEARNING FUNCTION ---
 def learn_keyword(manager, keyword, category):
-    # 1. Load Rules
     rules_df = manager.read_csv("budget_rules")
     if rules_df.empty: return False
     
-    # 2. Find Category Index
     mask = rules_df['Category'] == category
     if not mask.any(): return False
     
     idx = rules_df[mask].index[0]
     
-    # 3. Parse and Append
     current_kws = rules_df.at[idx, 'Keywords']
     try:
         kw_list = json.loads(current_kws) if pd.notna(current_kws) and current_kws else []
@@ -211,21 +208,18 @@ def auto_categorize(df, rules):
         desc = str(row['Description']).lower()
         matched = False
         
-        # 1. Custom Rules
         for keyword, category in rules.items():
             if keyword in desc:
                 df.at[index, 'Category'] = category
                 matched = True
                 break
         
-        # 2. Smart Defaults
         if not matched:
             for keyword, category in SMART_DEFAULTS.items():
                 if keyword in desc:
                     df.at[index, 'Category'] = category
                     break
         
-        # 3. Nuance Check
         if "amazon" in desc or "amzn" in desc or "target" in desc:
             df.at[index, 'Nuance_Check'] = True
             
@@ -434,8 +428,6 @@ if check_password():
             d_amt = c2.number_input("Amount ($)", min_value=0.0, step=0.01)
             d_desc = st.text_input("Description", placeholder="e.g. HEB")
             is_cru = st.checkbox("Is this a Cru Expense?")
-            
-            # --- THE MEMORY CHECKBOX ---
             remember = st.checkbox(f"🧠 Remember that '{d_desc}' is always '{sel_cat}'?")
             
             if st.button("Add Transaction", type="primary"):
@@ -449,15 +441,10 @@ if check_password():
                         "Nuance_Check": False
                     }])
                     updated_df = pd.concat([tx_df, new_row], ignore_index=True)
-                    
-                    # 1. Save Transaction
                     manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
-                    
-                    # 2. Train Brain (If Checked)
                     if remember and d_desc:
                         learn_keyword(manager, d_desc, sel_cat)
                         st.toast(f"Brain trained: {d_desc} -> {sel_cat}", icon="🧠")
-                        
                     st.success("Added!"); time.sleep(1); st.rerun()
 
         with tab_csv:
@@ -479,7 +466,6 @@ if check_password():
                             temp['Amount'] = temp['Amount'].abs()
                             temp['Category'] = None; temp['Is_Cru'] = False; temp['Nuance_Check'] = False
                             
-                            # USE SMART AUTO-CATEGORIZE
                             temp = auto_categorize(temp, custom_rules)
                             new_dfs.append(temp)
                         except Exception as e: st.error(f"Error {f.name}: {e}")
@@ -490,31 +476,21 @@ if check_password():
                         combined = combined.drop_duplicates(subset=['Date', 'Description', 'Amount'])
                         manager.write_csv(combined, "transactions", "Bulk Upload")
                         st.success(f"Added {len(new_data)} items!"); time.sleep(2); st.rerun()
-        
-        # --- SPLIT TRANSACTION TAB ---
+
         with tab_split:
-            st.info("Split a large transaction into multiple categories (e.g., Target run -> Groceries + Clothes).")
-            
+            st.info("Split a large transaction into multiple categories.")
             if tx_df.empty:
                 st.warning("No transactions available to split.")
             else:
-                # 1. Select Transaction
-                # Create a readable label for dropdown
                 tx_df = tx_df.sort_values(by="Date", ascending=False)
                 tx_df['label'] = tx_df.apply(lambda x: f"{x['Date']} | {x['Description']} | ${x['Amount']}", axis=1)
-                
                 selected_label = st.selectbox("Select Transaction to Split", tx_df['label'].unique())
                 
-                # Get the row
                 original_row = tx_df[tx_df['label'] == selected_label].iloc[0]
                 orig_amt = float(original_row['Amount'])
-                
                 st.markdown(f"**Original Amount:** `${orig_amt:,.2f}`")
                 
-                # 2. How many splits?
                 num_splits = st.radio("Split into how many?", [2, 3, 4], horizontal=True)
-                
-                # 3. Dynamic Inputs
                 splits = []
                 running_total = 0.0
                 
@@ -525,50 +501,37 @@ if check_password():
                     splits.append({"amount": val, "category": cat})
                     running_total += val
                 
-                # 4. Math Check
                 remaining = orig_amt - running_total
                 if abs(remaining) < 0.01:
                     st.success("✅ Math matches! Ready to split.")
-                    valid_math = True
+                    if st.button("✂️ Process Split"):
+                        mask = (tx_df['Date'] == original_row['Date']) & \
+                               (tx_df['Description'] == original_row['Description']) & \
+                               (tx_df['Amount'] == original_row['Amount'])
+                        idx_to_drop = tx_df[mask].index[0]
+                        new_tx_df = tx_df.drop(idx_to_drop).drop(columns=['label'])
+                        
+                        new_rows = []
+                        for s in splits:
+                            new_rows.append({
+                                "Date": original_row['Date'],
+                                "Description": f"{original_row['Description']} (Split)",
+                                "Amount": s['amount'],
+                                "Category": s['category'],
+                                "Is_Cru": original_row['Is_Cru'],
+                                "Nuance_Check": False
+                            })
+                        
+                        new_tx_df = pd.concat([new_tx_df, pd.DataFrame(new_rows)], ignore_index=True)
+                        manager.write_csv(new_tx_df, "transactions", f"Split {original_row['Description']}")
+                        st.success("Transaction Split!"); time.sleep(1); st.rerun()
                 else:
                     st.error(f"❌ Amounts do not match. Remaining: ${remaining:,.2f}")
-                    valid_math = False
-                
-                # 5. Process Button
-                if st.button("✂️ Process Split", disabled=not valid_math):
-                    # Remove original
-                    # We use Date, Desc, Amount to identify (assuming uniqueness roughly)
-                    mask = (tx_df['Date'] == original_row['Date']) & \
-                           (tx_df['Description'] == original_row['Description']) & \
-                           (tx_df['Amount'] == original_row['Amount'])
-                    
-                    # Drop the old one
-                    # We need to drop only ONE instance if there are duplicates, but usually unique enough
-                    idx_to_drop = tx_df[mask].index[0]
-                    new_tx_df = tx_df.drop(idx_to_drop).drop(columns=['label'])
-                    
-                    # Create new rows
-                    new_rows = []
-                    for s in splits:
-                        new_rows.append({
-                            "Date": original_row['Date'],
-                            "Description": f"{original_row['Description']} (Split)",
-                            "Amount": s['amount'],
-                            "Category": s['category'],
-                            "Is_Cru": original_row['Is_Cru'], # Inherit Cru status? Or let user change? Keep simple for now.
-                            "Nuance_Check": False
-                        })
-                    
-                    new_tx_df = pd.concat([new_tx_df, pd.DataFrame(new_rows)], ignore_index=True)
-                    
-                    manager.write_csv(new_tx_df, "transactions", f"Split {original_row['Description']}")
-                    st.success("Transaction Split!"); time.sleep(1); st.rerun()
 
     # --- REVIEW ---
     elif page == "🔄 Review & Edit":
         st.header("📝 Review Transactions")
         
-        # --- BRAIN TRAINING STATION ---
         with st.expander("🧠 Train the Brain (Teach it new rules)"):
             c_learn1, c_learn2, c_learn3 = st.columns([2, 2, 1])
             learn_kw = c_learn1.text_input("If description contains...", placeholder="e.g. Netflix")
@@ -581,7 +544,6 @@ if check_password():
                     else: st.error("Could not update rules.")
         
         st.divider()
-        
         view_mode = st.radio("Show:", ["Needs Review", "All Transactions"])
         mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
         edit_view = tx_df[mask].copy() if view_mode == "Needs Review" else tx_df.copy()
@@ -597,8 +559,23 @@ if check_password():
                 }, use_container_width=True, num_rows="dynamic")
             
             if st.button("Save Changes"):
-                tx_df.update(edited_view)
-                manager.write_csv(tx_df, "transactions", "Review Changes")
+                # REPLACEMENT LOGIC FOR DELETIONS
+                if view_mode == "All Transactions":
+                     # If seeing all, the editor IS the new master
+                     final_df = edited_view.sort_values(by="Date", ascending=False)
+                     manager.write_csv(final_df, "transactions", "Review Changes (Full Replace)")
+                     st.success("Saved!"); time.sleep(1); st.rerun()
+                else:
+                     # If seeing subset, we must remove old subset and add new subset
+                     indices_shown = edit_view.index
+                     # Drop original rows from master
+                     tx_df = tx_df.drop(indices_shown)
+                     # Add back the edited rows (some might be missing if deleted)
+                     tx_df = pd.concat([tx_df, edited_view], ignore_index=False)
+                     tx_df = tx_df.sort_values(by="Date", ascending=False)
+                     
+                     manager.write_csv(tx_df, "transactions", "Review Changes (Subset Replace)")
+                     st.success("Saved!"); time.sleep(1); st.rerun()
 
     # --- SETTINGS ---
     elif page == "💰 Income & Budget":
@@ -610,6 +587,31 @@ if check_password():
         with t2:
             st.info("Edit your budget targets here.")
             
+            # --- THE MIGRATOR ---
+            st.markdown("---")
+            st.subheader("🛠️ Bulk Rename Tool")
+            st.caption("Use this to move transactions from an old category (e.g. 'Eating Out') to a new one (e.g. 'Eating out together').")
+            
+            if not tx_df.empty:
+                current_used_cats = [str(x) for x in tx_df['Category'].unique() if pd.notna(x)]
+                current_used_cats.sort()
+                
+                valid_cats = sorted(list(categories.keys()))
+                
+                col_mig1, col_mig2, col_mig3 = st.columns([2, 2, 1])
+                old_cat_input = col_mig1.selectbox("Find all transactions labeled:", current_used_cats)
+                new_cat_input = col_mig2.selectbox("And rename them to:", valid_cats)
+                
+                if col_mig3.button("Rename"):
+                    count = len(tx_df[tx_df['Category'] == old_cat_input])
+                    if count > 0:
+                        tx_df.loc[tx_df['Category'] == old_cat_input, 'Category'] = new_cat_input
+                        manager.write_csv(tx_df, "transactions", f"Migrate {old_cat_input} -> {new_cat_input}")
+                        st.success(f"Moved {count} transactions!"); time.sleep(1); st.rerun()
+                    else:
+                        st.warning("No transactions found with that category.")
+            st.markdown("---")
+
             st.markdown("---")
             col_warn, col_btn = st.columns([3, 1])
             col_warn.warning("Click here if you need to force-load the new 2025 Budget Categories.")
