@@ -1,10 +1,5 @@
 Category,Group,BudgetAmount
-Tithes,Charity,0.0
 Giving,Charity,150.0
-SM savings,Charity,0.0
-HOUSE,Savings,0.0
-Car,Savings,0.0
-Dog,Savings,0.0
 Mortgage,Housing,1522.22
 Utilities,Housing,300.0
 Internet/TV,Housing,76.0
@@ -13,20 +8,20 @@ Car Insurance,Insurance,250.0
 Gas,Transportation,250.0
 Car Maintenance,Transportation,100.0
 Groceries,Food,700.0
-Eating out together,Food,300.0
-Eating out seperate,Food,0.0
-Pocket Money his,Personal,100.0
-Pocket Money her,Personal,100.0
-T Haircuts,Personal,30.0
+Eating out ,Food,300.0
+Pocket Money ,Personal,200.0
 Gifts,Miscellaneous,100.0
 toiletries,Miscellaneous,100.0
 etc.,Miscellaneous,100.0
 Dates,Miscellaneous,100.0
 House,Miscellaneous,100.0
 Clothes,Miscellaneous,50.0
-Chiropractor,Medical,100.0
+Chiropractor,Medical,200.0
 Massage,Medical,144.0
 Medicine,Medical,50.0
-wellw/rae,Medical,0.0
+Bills,Medical,0.0
 Dog Expenses,Dog,50.0
-Childcare,Baby,200.0
+Childcare,Kids,185.0
+Mirren,Kids,50.0
+Felicity,Kids,50.0
+Felicity Formula,Kids,350.0
