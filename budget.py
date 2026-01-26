@@ -7,31 +7,24 @@ import random
 import time
 from datetime import datetime
 
-# --- HARDCODED DEFAULTS (The "Starter Pack") ---
+# --- HARDCODED DEFAULTS ---
 DEFAULT_BUDGET = [
     {"Group": "Giving", "Category": "Tithe", "BudgetAmount": 500.0},
     {"Group": "Giving", "Category": "Offerings", "BudgetAmount": 100.0},
     {"Group": "Housing", "Category": "Mortgage/Rent", "BudgetAmount": 1500.0},
     {"Group": "Housing", "Category": "Utilities", "BudgetAmount": 250.0},
-    {"Group": "Housing", "Category": "Maintenance", "BudgetAmount": 100.0},
     {"Group": "Food", "Category": "Groceries", "BudgetAmount": 600.0},
     {"Group": "Food", "Category": "Eating Out", "BudgetAmount": 150.0},
     {"Group": "Transportation", "Category": "Gas", "BudgetAmount": 200.0},
-    {"Group": "Transportation", "Category": "Car Insurance", "BudgetAmount": 100.0},
-    {"Group": "Transportation", "Category": "Repairs/Maint", "BudgetAmount": 50.0},
     {"Group": "Lifestyle", "Category": "Entertainment", "BudgetAmount": 100.0},
-    {"Group": "Lifestyle", "Category": "Subscriptions", "BudgetAmount": 50.0},
-    {"Group": "Lifestyle", "Category": "Personal Care", "BudgetAmount": 50.0},
-    {"Group": "Health", "Category": "Medical/Rx", "BudgetAmount": 100.0},
     {"Group": "Savings", "Category": "Emergency Fund", "BudgetAmount": 200.0},
-    {"Group": "Savings", "Category": "Investments", "BudgetAmount": 200.0},
     {"Group": "Business", "Category": "Business/Cru", "BudgetAmount": 0.0}
 ]
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Stewardship App", page_icon="🌸", layout="wide")
 
-# --- CUSTOM CSS ---
+# --- CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFF0F5; }
@@ -58,7 +51,7 @@ def check_password():
             st.error("Incorrect password")
     return False
 
-# --- DATA MANAGER ---
+# --- DATA MANAGER (ROBUST) ---
 class CloudBudgetManager:
     def __init__(self):
         self.conn = st.connection("gsheets", type=GSheetsConnection)
@@ -66,12 +59,18 @@ class CloudBudgetManager:
     def get_data(self, worksheet_name):
         try:
             return self.conn.read(worksheet=worksheet_name, ttl=0)
-        except:
+        except Exception as e:
+            # If read fails, return empty DF but don't crash yet
             return pd.DataFrame()
 
     def update_data(self, df, worksheet_name):
-        self.conn.update(worksheet=worksheet_name, data=df)
-        st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
+        try:
+            self.conn.update(worksheet=worksheet_name, data=df)
+            st.toast(f"Saved to cloud ({worksheet_name})! ☁️", icon="✅")
+        except Exception as e:
+            st.error(f"⚠️ Critical Error updating '{worksheet_name}'.")
+            st.error(f"Details: {str(e)}")
+            st.info("Troubleshooting: 1. Check tab names in Google Sheet. 2. Verify 'budget-bot' email is Editor.")
 
 def auto_categorize(df, rules, defaults):
     if 'Category' not in df.columns: df['Category'] = None
@@ -98,30 +97,33 @@ def auto_categorize(df, rules, defaults):
 if check_password():
     manager = CloudBudgetManager()
     
-    # 1. Load Rules (Auto-Initialize if Empty)
+    # 1. Load Rules with Fallback
+    st.caption("🔄 Syncing with Cloud...")
     rules_df = manager.get_data("BudgetRules")
     
     if rules_df.empty:
-        # FIRST RUN: Populate with Hardcoded Defaults
-        st.toast("Initializing Default Budget...", icon="⚙️")
-        rules_df = pd.DataFrame(DEFAULT_BUDGET)
-        rules_df["Keywords"] = "" # Add empty keywords column
-        manager.update_data(rules_df, "BudgetRules")
-        time.sleep(1) # Give it a second to sync
-    
+        # If empty, we try to initialize, but wrapped in try/except to catch permission errors cleanly
+        try:
+            rules_df = pd.DataFrame(DEFAULT_BUDGET)
+            rules_df["Keywords"] = ""
+            manager.update_data(rules_df, "BudgetRules")
+        except:
+            st.warning("Could not initialize defaults. Is the sheet shared with the bot?")
+
     categories = {} 
     targets = {}    
     custom_rules = {} 
     
-    for i, row in rules_df.iterrows():
-        if pd.notna(row['Category']):
-            categories[row['Category']] = row['Group']
-            targets[row['Category']] = row['BudgetAmount']
-            if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
-                try:
-                    kws = json.loads(row['Keywords'])
-                    for k in kws: custom_rules[k] = row['Category']
-                except: pass
+    if not rules_df.empty:
+        for i, row in rules_df.iterrows():
+            if pd.notna(row['Category']):
+                categories[row['Category']] = row['Group']
+                targets[row['Category']] = row['BudgetAmount']
+                if 'Keywords' in row and pd.notna(row['Keywords']) and row['Keywords']:
+                    try:
+                        kws = json.loads(row['Keywords'])
+                        for k in kws: custom_rules[k] = row['Category']
+                    except: pass
 
     # 2. Load Transactions
     tx_df = manager.get_data("Transactions")
@@ -199,7 +201,7 @@ if check_password():
             st.info("Use this when you are at the store to check budget and add expense.")
             all_cats = sorted(list(categories.keys()))
             if not all_cats:
-                st.warning("No categories found! Go to 'Income & Budget' to reset.")
+                st.warning("No categories found! Waiting for sync...")
                 sel_cat = None
             else:
                 sel_cat = st.selectbox("Category", all_cats, index=0)
