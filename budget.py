@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import json
 import time
+import random
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -19,6 +20,22 @@ FILE_PATHS = {
 }
 
 RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org"]
+
+# --- STEWARDSHIP VERSES ---
+STEWARDSHIP_VERSES = [
+    "“Honor the Lord with your wealth, with the firstfruits of all your crops.” – Proverbs 3:9",
+    "“For where your treasure is, there your heart will be also.” – Matthew 6:21",
+    "“Whoever can be trusted with very little can also be trusted with much.” – Luke 16:10",
+    "“It is required that those who have been given a trust must prove faithful.” – 1 Corinthians 4:2",
+    "“The rich rule over the poor, and the borrower is slave to the lender.” – Proverbs 22:7",
+    "“Bring the whole tithe into the storehouse, that there may be food in my house.” – Malachi 3:10",
+    "“Keep your lives free from the love of money and be content with what you have.” – Hebrews 13:5",
+    "“Command those who are rich in this present world not to be arrogant nor to put their hope in wealth, which is so uncertain, but to put their hope in God.” – 1 Timothy 6:17",
+    "“But remember the Lord your God, for it is he who gives you the ability to produce wealth.” – Deuteronomy 8:18",
+    "“Each of you should use whatever gift you have received to serve others, as faithful stewards of God’s grace in its various forms.” – 1 Peter 4:10",
+    "“A good name is more desirable than great riches; to be esteemed is better than silver or gold.” – Proverbs 22:1",
+    "“Whatever you do, work at it with all your heart, as working for the Lord, not for human masters.” – Colossians 3:23"
+]
 
 # --- HARDCODED DEFAULTS (2025 SIMPLIFIED) ---
 DEFAULT_BUDGET = [
@@ -334,6 +351,10 @@ if check_password():
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
         
+        # --- VERSE OF THE DAY ---
+        st.markdown(f"> *{random.choice(STEWARDSHIP_VERSES)}*")
+        st.divider()
+        
         col_d1, col_d2 = st.columns([2, 1])
         with col_d1:
             if not tx_df.empty and 'Date' in tx_df.columns:
@@ -492,25 +513,20 @@ if check_password():
         
         # --- SAVING LOGIC ---
         elif st.session_state.processed_new_rows or st.session_state.master_indices_to_drop:
-            # We have finished the queue, now execute the batch save
             with st.spinner("Finalizing changes..."):
-                # 1. Drop replaced rows from master
                 if st.session_state.master_indices_to_drop:
                     tx_df = tx_df.drop(st.session_state.master_indices_to_drop)
                 
-                # 2. Add new rows
                 if st.session_state.processed_new_rows:
                     new_data_df = pd.DataFrame(st.session_state.processed_new_rows)
                     tx_df = pd.concat([tx_df, new_data_df], ignore_index=True)
                 
-                # 3. Sort and Save
-                tx_df['Date'] = pd.to_datetime(tx_df['Date']) # Ensure sortability
+                tx_df['Date'] = pd.to_datetime(tx_df['Date'])
                 tx_df = tx_df.sort_values(by="Date", ascending=False)
                 tx_df['Date'] = tx_df['Date'].dt.strftime('%Y-%m-%d')
                 
                 manager.write_csv(tx_df, "transactions", "Batch Upload with De-Duping")
                 
-                # 4. Clear Session State
                 st.session_state.conflict_queue = []
                 st.session_state.processed_new_rows = []
                 st.session_state.master_indices_to_drop = []
@@ -557,15 +573,13 @@ if check_password():
                             "Nuance_Check": False
                         }])
                         
-                        # --- TRIGGER DUPLICATE DETECTION FOR MANUAL ---
                         conflicts, clean = detect_duplicates(new_row, tx_df)
                         
                         if conflicts:
                             st.session_state.conflict_queue = conflicts
-                            st.session_state.processed_new_rows = [] # Clear previous junk
+                            st.session_state.processed_new_rows = []
                             st.rerun()
                         else:
-                            # Direct Save
                             updated_df = pd.concat([tx_df, new_row], ignore_index=True)
                             manager.write_csv(updated_df, "transactions", "Add Manual Transaction")
                             if remember and d_desc:
@@ -599,11 +613,10 @@ if check_password():
                             big_new_df = pd.concat(all_new_rows, ignore_index=True)
                             big_new_df['Date'] = pd.to_datetime(big_new_df['Date']).dt.strftime('%Y-%m-%d')
                             
-                            # --- TRIGGER DUPLICATE DETECTION FOR CSV ---
                             conflicts, clean_rows = detect_duplicates(big_new_df, tx_df)
                             
                             st.session_state.conflict_queue = conflicts
-                            st.session_state.processed_new_rows = clean_rows # Queue the clean ones immediately
+                            st.session_state.processed_new_rows = clean_rows
                             st.rerun()
 
             with tab_split:
