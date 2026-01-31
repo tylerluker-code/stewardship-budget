@@ -42,7 +42,6 @@ DEFAULT_BUDGET = [
     {"Group": "Charity", "Category": "Tithes", "BudgetAmount": 0.0},
     {"Group": "Charity", "Category": "Giving", "BudgetAmount": 150.0},
     {"Group": "Charity", "Category": "SM savings", "BudgetAmount": 0.0},
-    {"Group": "Savings", "Category": "HOUSE", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Car", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Dog", "BudgetAmount": 0.0},
     {"Group": "Housing", "Category": "Mortgage", "BudgetAmount": 1522.22},
@@ -806,3 +805,4 @@ if check_password():
             
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
             if st.button("Save Categories"): manager.write_csv(edited_rules, "budget_rules", "Update Rules")
+
