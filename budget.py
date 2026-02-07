@@ -19,7 +19,7 @@ FILE_PATHS = {
     "income": "data/income.csv"
 }
 
-RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org"]
+RECIPIENTS = ["tyler.luker@cru.org", "marianna.luker@cru.org", "mareluker@gmail.com"]
 
 # --- STEWARDSHIP VERSES ---
 STEWARDSHIP_VERSES = [
@@ -42,6 +42,7 @@ DEFAULT_BUDGET = [
     {"Group": "Charity", "Category": "Tithes", "BudgetAmount": 0.0},
     {"Group": "Charity", "Category": "Giving", "BudgetAmount": 150.0},
     {"Group": "Charity", "Category": "SM savings", "BudgetAmount": 0.0},
+    {"Group": "Savings", "Category": "HOUSE", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Car", "BudgetAmount": 0.0},
     {"Group": "Savings", "Category": "Dog", "BudgetAmount": 0.0},
     {"Group": "Housing", "Category": "Mortgage", "BudgetAmount": 1522.22},
@@ -259,14 +260,12 @@ def detect_duplicates(new_df, master_df):
     if master_df.empty:
         return [], new_df.to_dict('records')
 
-    # Convert dates to datetime for comparison
     master_df['DateObj'] = pd.to_datetime(master_df['Date'])
     
     for _, new_row in new_df.iterrows():
         new_date = pd.to_datetime(new_row['Date'])
         new_amt = float(new_row['Amount'])
         
-        # 1. Exact Match Check (Date + Amt + Desc) - Auto Drop
         exact_match = master_df[
             (master_df['DateObj'] == new_date) & 
             (master_df['Amount'] == new_amt) & 
@@ -274,9 +273,8 @@ def detect_duplicates(new_df, master_df):
         ]
         
         if not exact_match.empty:
-            continue # Skip silently (it's exactly the same)
+            continue
 
-        # 2. Fuzzy Match (Same Amt + Date +/- 2 days)
         date_min = new_date - timedelta(days=2)
         date_max = new_date + timedelta(days=2)
         
@@ -287,12 +285,11 @@ def detect_duplicates(new_df, master_df):
         ]
         
         if not fuzzy_match.empty:
-            # Conflict found!
-            existing_row = fuzzy_match.iloc[0] # Take the first match
+            existing_row = fuzzy_match.iloc[0]
             conflicts.append({
                 'new': new_row.to_dict(),
                 'existing': existing_row.to_dict(),
-                'existing_idx': existing_row.name # The index in master_df
+                'existing_idx': existing_row.name
             })
         else:
             clean_rows.append(new_row.to_dict())
@@ -349,8 +346,6 @@ if check_password():
     # --- DASHBOARD ---
     if page == "🏠 Dashboard":
         st.title("🌸 Stewardship Dashboard")
-        
-        # --- VERSE OF THE DAY ---
         st.markdown(f"> *{random.choice(STEWARDSHIP_VERSES)}*")
         st.divider()
         
@@ -510,7 +505,6 @@ if check_password():
                 st.session_state.conflict_queue.pop(0)
                 st.rerun()
         
-        # --- SAVING LOGIC ---
         elif st.session_state.processed_new_rows or st.session_state.master_indices_to_drop:
             with st.spinner("Finalizing changes..."):
                 if st.session_state.master_indices_to_drop:
@@ -534,7 +528,6 @@ if check_password():
                 time.sleep(2)
                 st.rerun()
 
-        # --- NORMAL TABS ---
         else:
             tab_manual, tab_csv, tab_split = st.tabs(["✍️ Manual Entry", "📂 Bulk Upload", "✂️ Split Transaction"])
             
@@ -686,21 +679,49 @@ if check_password():
         
         st.divider()
         
+        # --- NEW DATE FILTER ---
         c_view1, c_view2, c_view3 = st.columns([2, 1, 1])
-        view_mode = c_view1.radio("Show:", ["Needs Review", "All Transactions"], horizontal=True)
+        
+        # Build Filter Options
+        filter_options = ["⚠️ Needs Review (Action Items)", "📅 Current Month", "All History"]
+        
+        if 'Date' in tx_df.columns:
+            tx_df['Date'] = pd.to_datetime(tx_df['Date'])
+            # Get unique months in data
+            unique_months = tx_df['Date'].dt.to_period('M').unique()
+            unique_months = sorted(unique_months, reverse=True)
+            # Add them to list
+            for m in unique_months:
+                filter_options.append(f"View: {m.strftime('%B %Y')}")
+        
+        selected_view = c_view1.selectbox("🔍 Filter View:", filter_options)
         sort_col = c_view2.selectbox("Sort by:", ["Date", "Amount", "Category", "Description"], index=0)
         sort_order = c_view3.radio("Order:", ["Newest/Highest", "Oldest/Lowest"], horizontal=True)
         ascending = True if sort_order == "Oldest/Lowest" else False
 
-        if 'Date' in tx_df.columns: tx_df['Date'] = pd.to_datetime(tx_df['Date'])
-        
-        mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
-        edit_view = tx_df[mask].copy() if view_mode == "Needs Review" else tx_df.copy()
+        # Apply Filters
+        if selected_view == "⚠️ Needs Review (Action Items)":
+            mask = (tx_df['Category'].isnull()) | (tx_df['Nuance_Check'] == True)
+            edit_view = tx_df[mask].copy()
+        elif selected_view == "All History":
+            edit_view = tx_df.copy()
+        elif selected_view == "📅 Current Month":
+            now = datetime.now()
+            mask = (tx_df['Date'].dt.month == now.month) & (tx_df['Date'].dt.year == now.year)
+            edit_view = tx_df[mask].copy()
+        else:
+            # Parse "View: February 2026"
+            month_str = selected_view.replace("View: ", "")
+            # Convert dashboard string back to datetime to filter
+            target_date = datetime.strptime(month_str, "%B %Y")
+            mask = (tx_df['Date'].dt.month == target_date.month) & (tx_df['Date'].dt.year == target_date.year)
+            edit_view = tx_df[mask].copy()
         
         if not edit_view.empty:
             edit_view = edit_view.sort_values(by=sort_col, ascending=ascending)
             
-        if edit_view.empty: st.success("Nothing to review!")
+        if edit_view.empty:
+            st.success("Nothing to see here! (No transactions match this filter)")
         else:
             cat_options = sorted(list(categories.keys())); cat_options.insert(0, "Business/Cru")
             
@@ -736,7 +757,6 @@ if check_password():
         with t2:
             st.info("Edit your budget targets here.")
             
-            # --- THE CONSOLIDATOR ---
             st.markdown("---")
             st.subheader("✨ Consolidate Categories")
             st.caption("One-click fix to rename all 'Eating out Together/Separate' to 'Eating Out', and 'Pocket Money His/Her' to 'Pocket Money'.")
@@ -805,4 +825,3 @@ if check_password():
             
             edited_rules = st.data_editor(rules_df[['Category', 'Group', 'BudgetAmount']], num_rows="dynamic", use_container_width=True)
             if st.button("Save Categories"): manager.write_csv(edited_rules, "budget_rules", "Update Rules")
-
